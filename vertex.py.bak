@@ -1,0 +1,83 @@
+import requests
+import json
+import time
+
+url = "http://api.tenclock.shop:11004/api/channel/"
+
+def put_verlex_channel(name, key):
+    payload = json.dumps({
+        "mode": "single",
+        "channel": {
+            "type": 41,
+            "openai_organization": "",
+            "max_input_tokens": 0,
+            "models": "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-lite-preview-06-17,gemini-2.5-flash-nothinking,gemini-2.5-flash-thinking,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-thinking,gemini-2.5-flash-lite,gemini-2.5-pro-thinking-*,gemini-2.5-flash-thinking-*,gemini-2.5-flash-lite-thinking-*",
+            "auto_ban": 1,
+            "failure_timeout_ban_limit": 1200,
+            "enable_timestamp_granularity": 0,
+            "enable_cloud_tools": 0,
+            "groups": [
+            "default"
+            ],
+            "priority": 0,
+            "weight": 0,
+            "price": 0,
+            "multi_key_mode": "random",
+            "name": name,
+            "other": "{\"default\":\"global\",\"gemini-2.0-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-preview-image-generation\":\"global\",\"gemini-2.5-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite-preview-06-17\":\"global\",\"gemini-2.5-flash-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\"}",
+            "base_url": "",
+            "test_model": "",
+            "model_mapping": "",
+            "return_model_mapping": "",
+            "model_timeout_mapping": "",
+            "tag": "",
+            "status_code_mapping": "",
+            "setting": "{\n  \"ChannelRequestRateLimitEnabled\": true,\n  \"ChannelRequestRateLimitDurationMinutes\": 1,\n  \"ChannelRequestRateLimitCount\": 30,\n  \"ChannelRequestRateLimitSuccessCount\": 30,\n  \"ChannelRequestRateLimitFailureCount\": 30\n}",
+            "key": key,
+            "group": "default,vertex"
+        }
+    })
+    headers = {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json',
+        'New-API-User': '1',
+        'Origin': 'http://api.tenclock.shop:11004',
+        'Proxy-Connection': 'keep-alive',
+        'Referer': 'http://api.tenclock.shop:11004/console/channel',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+        'X-Forwarded-Host': '40.160.32.55:11002',
+        'Authorization': 'Bearer +a4OPxAc+fkKFGp1EOrw61EO8ESj8m0='
+    }
+
+    max_retries = 3
+    retry_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.request("POST", url, headers=headers, data=payload, timeout=10)
+            print(f"尝试 {attempt + 1}/{max_retries}: 状态码={response.status_code}")
+            print(response.text)
+
+            #  如果是200返回true，否则继续重试
+            if response.status_code == 200:
+                print(f"成功! 在第 {attempt + 1} 次尝试")
+                return True
+            else:
+                if attempt < max_retries - 1:
+                    print(f"失败，{retry_delay}秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+
+        except requests.exceptions.RequestException as e:
+            print(f"尝试 {attempt + 1}/{max_retries} 发生异常: {e}")
+            if attempt < max_retries - 1:
+                print(f"等待 {retry_delay}秒后重试...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                print("达到最大重试次数，操作失败")
+
+    print("所有重试均失败")
+    return False

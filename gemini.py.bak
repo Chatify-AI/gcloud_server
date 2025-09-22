@@ -1,0 +1,81 @@
+import requests
+import json
+import time
+
+url = "http://api.tenclock.shop:11003/api/channel/"
+
+def put_gemini_channel(name, key):
+    payload = json.dumps({
+        "mode": "batch",
+        "channel": {
+            "type": 24,
+            "max_input_tokens": 0,
+            "other": "",
+            "models": "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-lite-preview-06-17,gemini-2.5-flash-nothinking,gemini-2.5-flash-thinking,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-thinking,gemini-2.5-flash-lite,gemini-2.5-pro-thinking-*,gemini-2.5-flash-thinking-*,gemini-2.5-flash-lite-thinking-*",
+            "auto_ban": 1,
+            "failure_timeout_ban_limit": 1200,
+            "enable_timestamp_granularity": 0,
+            "enable_cloud_tools": 0,
+            "groups": [
+            "default"
+            ],
+            "priority": 3,
+            "weight": 0,
+            "price": 0,
+            "multi_key_mode": "random",
+            "name": name,
+            "base_url": "",
+            "test_model": "",
+            "model_mapping": "",
+            "return_model_mapping": "",
+            "model_timeout_mapping": "",
+            "tag": "",
+            "status_code_mapping": "",
+            "setting": "",
+            "key": key,
+            "group": "default,Gemini"
+        }
+    })
+    headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json',
+    'New-API-User': '1',
+    'Origin': 'http://api.tenclock.shop:11003',
+    'Proxy-Connection': 'keep-alive',
+    'Referer': 'http://api.tenclock.shop:11003/console/channel',
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+    'X-Forwarded-Host': '40.160.32.55:11001',
+    'Authorization': 'Bearer jZJ9nijbpeIucbSO2fpMFc8crguU'
+    }
+
+    max_retries = 3
+    retry_delay = 1
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.request("POST", url, headers=headers, data=payload, timeout=10)
+            print(f"尝试 {attempt + 1}/{max_retries}: 状态码={response.status_code}")
+            print(response.text)
+
+            if response.status_code == 200:
+                print(f"成功! 在第 {attempt + 1} 次尝试")
+                return True
+            else:
+                if attempt < max_retries - 1:
+                    print(f"失败，{retry_delay}秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+
+        except requests.exceptions.RequestException as e:
+            print(f"尝试 {attempt + 1}/{max_retries} 发生异常: {e}")
+            if attempt < max_retries - 1:
+                print(f"等待 {retry_delay}秒后重试...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                print("达到最大重试次数，操作失败")
+
+    print("所有重试均失败")
+    return False

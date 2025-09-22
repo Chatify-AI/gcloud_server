@@ -1,0 +1,5 @@
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE `g_cloud_accounts` (`id` INTEGER PRIMARY KEY AUTOINCREMENT, `email` VARCHAR(255) NOT NULL UNIQUE, `display_name` VARCHAR(255), `project_id` VARCHAR(255), `project_name` VARCHAR(255), `access_token` TEXT, `refresh_token` TEXT, `token_expiry` DATETIME, `scopes` TEXT, `is_active` TINYINT(1) DEFAULT 1, `last_used` DATETIME, `config_dir` VARCHAR(255), `config_name` VARCHAR(255), `created_at` DATETIME NOT NULL, `updated_at` DATETIME NOT NULL);
+INSERT INTO g_cloud_accounts VALUES(1,'lu18550402946@gmail.com','lu18550402946',NULL,NULL,'ya29.a0AQQ_BDR-6hVl9bWCvv5v2L3HiQssdyqeIOLGaDP9kZt8wcPklIgrgQSAYbeWdH4eS3khNwdptaUTkQq5wLnPYiu0yE1ZXt9oG5cg7g0vZMpF53BcUlqG8XGAF4H4BBP107Mr1QGelAP3UmjQnMZCrpIzxFVu9kDsT53-OyS-fjR91Vkz7qiHt1iPfanhM1ZGnCvC8t5uQtuuaCgYKARcSARASFQHGX2MiqbM4rY0V7ECyD2nd2evmwA0211',NULL,NULL,NULL,1,'2025-09-18 15:06:14.354 +00:00','/root/.config/gcloud-manager/account-1758207940479-cd9411c0','account-1758207940479-cd9411c0','2025-09-18 15:06:14.355 +00:00','2025-09-18 15:06:14.355 +00:00');
+COMMIT;

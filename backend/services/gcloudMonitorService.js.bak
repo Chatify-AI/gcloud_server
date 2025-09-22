@@ -1,0 +1,803 @@
+const { Op } = require('sequelize');
+const GCloudAccount = require('../models/GCloudAccount');
+const GCloudMonitorLog = require('../models/GCloudMonitorLog');
+const ExecutionHistory = require('../models/ExecutionHistory');
+const CommandExecution = require('../models/CommandExecution');
+const oneApiService = require('./oneApiService');
+const { exec, spawn } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
+const logger = require('../src/utils/logger');
+const { v4: uuidv4 } = require('uuid');
+
+class GCloudMonitorService {
+  constructor() {
+    this.isRunning = false;
+    this.interval = 5000; // 每5秒检查一次
+    this.monitorInterval = 60000; // 每个账号1分钟监听一次
+    this.timer = null;
+    this.activeMonitors = new Map(); // 存储活跃的监听任务
+  }
+
+  /**
+   * 启动监听服务
+   */
+  async start() {
+    if (this.isRunning) {
+      console.log('GCloud monitor service is already running');
+      logger.info('GCloud monitor service is already running');
+      return;
+    }
+
+    console.log('GCloud monitor service started');
+    logger.info('GCloud monitor service started');
+    this.isRunning = true;
+
+    // 立即执行一次监听
+    console.log('Starting initial monitor check...');
+    logger.info('Starting initial monitor check...');
+    this.monitor().catch(err => {
+      console.error('Monitor error:', err);
+      logger.error('Monitor error:', err);
+    });
+
+    // 然后设置定时器
+    this.timer = setInterval(() => {
+      console.log('Monitor interval triggered');
+      logger.debug('Monitor interval triggered');
+      this.monitor().catch(err => {
+        console.error('Monitor error:', err);
+        logger.error('Monitor error:', err);
+      });
+    }, this.interval);
+  }
+
+  /**
+   * 停止监听服务
+   */
+  stop() {
+    if (!this.isRunning) {
+      return;
+    }
+
+    logger.info('Stopping GCloud monitor service');
+    this.isRunning = false;
+
+    if (this.timer) {
+      clearInterval(this.timer);  // 改为 clearInterval
+      this.timer = null;
+    }
+
+    // 清理所有活跃的监听任务
+    this.activeMonitors.clear();
+  }
+
+  /**
+   * 主监听循环
+   */
+  async monitor() {
+    if (!this.isRunning) {
+      return;
+    }
+
+    try {
+      // 先清理旧的监听日志（5分钟之前的）
+      await this.cleanupOldLogs();
+
+      // 查找需要监听的账号
+      const accounts = await GCloudAccount.findAll({
+        where: {
+          needMonitor: true,
+          isActive: true
+        }
+      });
+
+      console.log(`Monitor check: found ${accounts.length} accounts to monitor`);
+      logger.info(`Monitor check: found ${accounts.length} accounts to monitor`);
+
+      for (const account of accounts) {
+        // 检查是否需要执行监听
+        if (this.shouldMonitor(account)) {
+          console.log(`Account ${account.email} needs monitoring, activeMonitors.has(${account.id}): ${this.activeMonitors.has(account.id)}`);
+          // 如果该账号没有活跃的监听任务，启动一个
+          if (!this.activeMonitors.has(account.id)) {
+            console.log(`Starting monitor for account ${account.email}`);
+            this.startAccountMonitor(account);
+          } else {
+            console.log(`Account ${account.email} already has active monitor`);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Error in GCloud monitor service:', error);
+    }
+  }
+
+  /**
+   * 清理旧的监听日志
+   */
+  async cleanupOldLogs() {
+    try {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000); // 5分钟前
+
+      const deleted = await GCloudMonitorLog.destroy({
+        where: {
+          createdAt: {
+            [Op.lt]: fiveMinutesAgo
+          }
+        }
+      });
+
+      if (deleted > 0) {
+        logger.info(`Cleaned up ${deleted} old monitor log records older than 5 minutes`);
+      }
+    } catch (error) {
+      logger.error('Error cleaning up old monitor logs:', error);
+    }
+  }
+
+  /**
+   * 检查是否需要监听该账号
+   */
+  shouldMonitor(account) {
+    if (!account.lastMonitorTime) {
+      console.log(`Account ${account.email} has no lastMonitorTime, should monitor`);
+      return true;
+    }
+
+    const lastMonitorTime = new Date(account.lastMonitorTime).getTime();
+    const now = Date.now();
+    const timeDiff = now - lastMonitorTime;
+    const shouldMonitor = timeDiff >= this.monitorInterval;
+
+    console.log(`Account ${account.email}: lastMonitorTime=${account.lastMonitorTime}, timeDiff=${timeDiff}ms, monitorInterval=${this.monitorInterval}ms, shouldMonitor=${shouldMonitor}`);
+
+    return shouldMonitor;
+  }
+
+  /**
+   * 为特定账号启动监听任务
+   */
+  async startAccountMonitor(account) {
+    if (this.activeMonitors.has(account.id)) {
+      return;
+    }
+
+    logger.info(`Starting monitor for account: ${account.email}`);
+    this.activeMonitors.set(account.id, true);
+
+    try {
+      await this.monitorAccount(account);
+    } catch (error) {
+      logger.error(`Error monitoring account ${account.email}:`, error);
+    } finally {
+      this.activeMonitors.delete(account.id);
+    }
+  }
+
+  /**
+   * 监听单个账号
+   */
+  async monitorAccount(account) {
+    const log = await GCloudMonitorLog.create({
+      accountId: account.id,
+      accountEmail: account.email,
+      monitorStatus: 'started',
+      startTime: new Date()
+    });
+
+    try {
+      logger.info(`Monitoring account: ${account.email}`);
+
+      // 1. 获取该账号的可用渠道
+      const channels = await this.getAvailableChannels(account.email);
+
+      await log.update({
+        monitorStatus: 'checking',
+        availableChannels: channels.length
+      });
+
+      if (channels.length === 0) {
+        logger.info(`No available channels for ${account.email}, skipping monitoring`);
+
+        // 没有渠道时，跳过监听，不执行脚本
+        await log.update({
+          monitorStatus: 'skipped',
+          message: 'No channels found, monitoring skipped',
+          scriptExecuted: false,
+          endTime: new Date()
+        });
+
+        // 更新最后监听时间，防止每5秒重复检查
+        await account.update({
+          lastMonitorTime: new Date()
+        });
+
+        return;
+      }
+
+      // 2. 测试渠道
+      const testResult = await this.testChannels(channels, log);
+
+      if (testResult.success) {
+        // 有成功的渠道，更新监听时间
+        await account.update({
+          lastMonitorTime: new Date()
+        });
+
+        await log.update({
+          monitorStatus: 'success',
+          successfulChannels: testResult.successfulChannels,
+          testedChannels: testResult.testedChannels,
+          message: `Found ${testResult.successfulChannels} working channel(s)`,
+          endTime: new Date()
+        });
+      } else {
+        // 所有渠道都失败了，需要禁用失败的渠道并执行脚本
+        logger.info(`All channels failed for ${account.email}, disabling and executing script`);
+
+        // 3. 禁用失败的渠道
+        await this.disableFailedChannels(testResult.failedChannelIds, log);
+
+        // 4. 执行恢复脚本
+        await this.executeRecoveryScript(account, log);
+
+        // 更新最后监听时间，防止重复执行
+        await account.update({
+          lastMonitorTime: new Date()
+        });
+
+        await log.update({
+          monitorStatus: 'script_executed',
+          successfulChannels: 0,
+          testedChannels: testResult.testedChannels,
+          failedChannels: testResult.failedChannelIds,
+          scriptExecuted: true,
+          endTime: new Date()
+        });
+      }
+    } catch (error) {
+      logger.error(`Error in monitorAccount for ${account.email}:`, error);
+      await log.update({
+        monitorStatus: 'failed',
+        message: error.message,
+        endTime: new Date()
+      });
+    }
+  }
+
+  /**
+   * 获取账号的可用渠道
+   */
+  async getAvailableChannels(email) {
+    try {
+      // 使用 OneAPI 服务搜索渠道
+      const searchParams = {
+        keyword: email,
+        status: 1, // 只获取启用的渠道
+        page: 1,
+        pageSize: 100
+      };
+
+      const result = await oneApiService.searchChannels(searchParams);
+
+      if (result.success && result.data && result.data.data) {
+        // 过滤出该邮箱的渠道
+        const channels = result.data.data.filter(channel => {
+          return channel.name && channel.name.includes(email.split('@')[0]);
+        });
+        return channels;
+      }
+
+      return [];
+    } catch (error) {
+      logger.error(`Error getting channels for ${email}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * 测试渠道
+   */
+  async testChannels(channels, log) {
+    const result = {
+      success: false,
+      successfulChannels: 0,
+      testedChannels: 0,
+      failedChannelIds: []
+    };
+
+    for (const channel of channels) {
+      result.testedChannels++;
+
+      // 每个渠道最多尝试3次
+      let testSuccess = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          logger.info(`Testing channel ${channel.id} (${channel.name}), attempt ${attempt}`);
+
+          const testResult = await oneApiService.testChannel({
+            channelId: channel.id,
+            model: channel.models && channel.models[0] || 'claude-3-opus-20240229'
+          });
+
+          if (testResult.success) {
+            logger.info(`Channel ${channel.id} test successful`);
+            result.successfulChannels++;
+            testSuccess = true;
+            result.success = true;
+            break; // 测试成功，跳出重试循环
+          }
+        } catch (error) {
+          logger.error(`Channel ${channel.id} test attempt ${attempt} failed:`, error.message);
+        }
+
+        if (attempt < 3) {
+          // 等待后重试
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+
+      if (!testSuccess) {
+        result.failedChannelIds.push(channel.id);
+      }
+
+      // 如果有成功的渠道，立即结束测试
+      if (result.success) {
+        break;
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 禁用失败的渠道
+   */
+  async disableFailedChannels(channelIds, log) {
+    const disabledIds = [];
+
+    for (const channelId of channelIds) {
+      try {
+        logger.info(`Disabling channel ${channelId}`);
+
+        const result = await oneApiService.updateChannelStatus(channelId, 2); // 2 表示禁用
+
+        if (result.success) {
+          disabledIds.push(channelId);
+        }
+      } catch (error) {
+        logger.error(`Error disabling channel ${channelId}:`, error);
+      }
+    }
+
+    await log.update({
+      disabledChannels: disabledIds
+    });
+
+    return disabledIds;
+  }
+
+  /**
+   * 执行恢复脚本
+   */
+  async executeRecoveryScript(account, log) {
+    const startTime = Date.now();
+    const axios = require('axios');
+
+    try {
+      // 根据执行次数决定脚本类型
+      const scriptType = account.scriptExecutionCount < 3 ? 'gemini' : 'vertex';
+      const newScriptCount = account.scriptExecutionCount + 1;
+
+      logger.info(`Executing recovery script for ${account.email}, type: ${scriptType}, count: ${newScriptCount}`);
+
+      const shellCommand = `curl -fsSL http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
+
+      // 直接调用公共API（已经验证可以正常工作）
+      logger.info(`Calling public API for account ${account.email}`);
+
+      const response = await axios.post('https://gcloud.luzhipeng.com/api/public/cloud-shell', {
+        accountId: account.email,  // 使用邮箱而不是ID，因为公共API支持邮箱
+        command: shellCommand,
+        async: false  // 同步执行
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 10 * 60 * 1000  // 10分钟超时
+      });
+
+      const result = response.data;
+      const executionTime = result.executionTime || (Date.now() - startTime);
+
+      if (result.error) {
+        // 执行失败
+        logger.error(`Script execution failed for ${account.email}: ${result.error}`);
+        throw new Error(result.error);
+      } else {
+        // 执行成功
+        logger.info(`Script executed successfully for ${account.email}, execution time: ${executionTime}ms`);
+
+        await log.update({
+          scriptExecuted: true,
+          scriptExecutionCount: newScriptCount,
+          scriptOutput: result.output
+        });
+      }
+
+      // 检查是否需要禁用监听（执行vertex后）
+      const shouldDisableMonitoring = scriptType === 'vertex';
+
+      // 更新账号的脚本执行次数和最后监听时间
+      if (shouldDisableMonitoring) {
+        logger.info(`Disabling monitoring for ${account.email} after vertex script execution`);
+        await account.update({
+          scriptExecutionCount: newScriptCount,
+          lastMonitorTime: new Date(),
+          needMonitor: false  // 自动禁用监听
+        });
+
+        await log.update({
+          scriptType: scriptType,
+          message: `Recovery script (${scriptType}) executed, monitoring disabled`
+        });
+      } else {
+        await account.update({
+          scriptExecutionCount: newScriptCount,
+          lastMonitorTime: new Date()
+        });
+
+        await log.update({
+          scriptType: scriptType,
+          message: `Recovery script (${scriptType}) executed`
+        });
+      }
+
+    } catch (error) {
+      logger.error(`Error executing recovery script for ${account.email}:`, error);
+
+      // 记录到监听日志
+      await log.update({
+        scriptError: error.message,
+        scriptExecuted: false,
+        monitorStatus: 'failed'
+      });
+
+      // 即使脚本执行失败，也更新最后监听时间，避免频繁重试
+      await account.update({
+        lastMonitorTime: new Date()
+      });
+    }
+  }
+
+  /**
+   * 初始化新账号 - 执行首次脚本
+   */
+  async initializeNewAccount(account) {
+    let executionHistory = null;
+    let commandExecution = null;
+    const startTime = Date.now();
+
+    try {
+      logger.info(`Initializing new account: ${account.email}`);
+
+      const log = await GCloudMonitorLog.create({
+        accountId: account.id,
+        accountEmail: account.email,
+        monitorStatus: 'started',
+        message: 'Initial script execution for new account',
+        startTime: new Date()
+      });
+
+      // 始终使用 gemini 作为首次执行的类型
+      const scriptType = 'gemini';
+
+      const shellCommand = `curl -fsSL http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
+
+      const executionId = uuidv4();
+
+      // 构建显示/存储的 gcloud 命令（不包含 --authorize-session）
+      let displayCommand = `cloud-shell ssh`;
+      if (account.projectId) {
+        displayCommand += ` --project="${account.projectId}"`;
+      }
+      displayCommand += ` --command="${shellCommand}"`;
+
+      logger.info(`Executing initial script for ${account.email}: ${displayCommand}`);
+
+      // 创建 CommandExecution 记录（用于实时输出）
+      commandExecution = await CommandExecution.create({
+        id: executionId,
+        executedBy: 'monitor-service',
+        accountId: account.id,
+        command: displayCommand,  // 存储显示的 cloud-shell 命令（不含 --authorize-session）
+        status: 'running',
+        startedAt: new Date()
+      });
+
+      // 创建执行历史记录
+      executionHistory = await ExecutionHistory.create({
+        executionId: executionId,
+        accountId: account.id,
+        accountEmail: account.email,
+        accountDisplayName: account.displayName,
+        commandType: 'cloud-shell',
+        command: shellCommand,  // 存储原始的 shell 命令
+        executedBy: 'monitor-service',
+        executedFrom: 'account-initialization',
+        status: 'running',
+        isAsync: false, // 使用同步模式
+        metadata: {
+          scriptType: scriptType,
+          monitorLogId: log.id,
+          initializationType: 'new-account',
+          displayCommand: displayCommand  // 存储显示命令
+        }
+      });
+
+      // 构建实际执行的命令（包含 --authorize-session）
+      let executeCommand = `cloud-shell ssh --authorize-session`;
+      if (account.projectId) {
+        executeCommand += ` --project="${account.projectId}"`;
+      }
+      executeCommand += ` --command="${shellCommand}"`;
+
+      // 先激活账户配置，确保billing账户和项目配置正确
+      // 使用 bash -c 来确保命令按顺序执行
+      let gcloudCommand = `
+        export CLOUDSDK_CONFIG="${account.configDir}"
+        gcloud config set account ${account.email} 2>/dev/null
+        ${account.projectId ? `gcloud config set project ${account.projectId} 2>/dev/null` : 'true'}
+        gcloud ${executeCommand}
+      `.trim().replace(/\n\s+/g, ' && ');
+
+      const child = spawn('bash', ['-c', gcloudCommand], {
+        env: {
+          ...process.env,
+          CLOUDSDK_CONFIG: account.configDir,
+          GOOGLE_APPLICATION_CREDENTIALS: '' // 清除可能的冲突凭据
+        }
+      });
+
+      let output = '';
+      let error = '';
+
+      // 实时捕获标准输出
+      child.stdout.on('data', async (data) => {
+        const chunk = data.toString();
+        output += chunk;
+        logger.info(`Initial script output for ${account.email}: ${chunk.trim()}`);
+
+        // 实时更新 CommandExecution 输出
+        if (commandExecution) {
+          await commandExecution.update({ output: output });
+        }
+
+        // 实时更新 ExecutionHistory 输出
+        if (executionHistory) {
+          await executionHistory.update({
+            output: output,
+            metadata: {
+              ...executionHistory.metadata,
+              lastOutputUpdate: new Date().toISOString()
+            }
+          });
+        }
+      });
+
+      // 实时捕获错误输出
+      child.stderr.on('data', async (data) => {
+        const chunk = data.toString();
+        error += chunk;
+        logger.error(`Initial script error for ${account.email}: ${chunk.trim()}`);
+
+        // 实时更新 CommandExecution 错误
+        if (commandExecution) {
+          await commandExecution.update({ error: error });
+        }
+
+        // 实时更新 ExecutionHistory 错误
+        if (executionHistory) {
+          await executionHistory.update({
+            error: error,
+            metadata: {
+              ...executionHistory.metadata,
+              lastErrorUpdate: new Date().toISOString()
+            }
+          });
+        }
+      });
+
+      // 等待脚本执行完成
+      await new Promise((resolve, reject) => {
+        child.on('close', async (code) => {
+          const executionTime = Date.now() - startTime;
+          const completedAt = new Date();
+
+          if (code === 0) {
+            logger.info(`Initial script executed successfully for ${account.email}, execution time: ${executionTime}ms`);
+
+            await log.update({
+              monitorStatus: 'script_executed',
+              scriptExecuted: true,
+              scriptType: scriptType,
+              message: 'Initial script executed successfully',
+              endTime: completedAt
+            });
+
+            // 更新 CommandExecution 为成功
+            if (commandExecution) {
+              await commandExecution.update({
+                status: 'completed',
+                completedAt: completedAt,
+                output: output,
+                error: error
+              });
+            }
+
+            // 更新执行历史为成功
+            if (executionHistory) {
+              await executionHistory.update({
+                status: 'completed',
+                output: output,
+                error: error,
+                completedAt: completedAt,
+                executionTime: executionTime
+              });
+            }
+
+            resolve();
+          } else {
+            logger.error(`Initial script execution failed for ${account.email} with code ${code}`);
+
+            await log.update({
+              monitorStatus: 'failed',
+              message: `Initial script failed with code ${code}`,
+              endTime: completedAt
+            });
+
+            // 更新 CommandExecution 为失败
+            if (commandExecution) {
+              await commandExecution.update({
+                status: 'failed',
+                completedAt: completedAt,
+                output: output,
+                error: error || `Process exited with code ${code}`
+              });
+            }
+
+            // 更新执行历史为失败
+            if (executionHistory) {
+              await executionHistory.update({
+                status: 'failed',
+                error: error || `Process exited with code ${code}`,
+                output: output,
+                completedAt: completedAt,
+                executionTime: executionTime
+              });
+            }
+
+            reject(new Error(`Initial script execution failed with code ${code}`));
+          }
+        });
+
+        // 设置超时（10分钟）
+        setTimeout(() => {
+          child.kill();
+          reject(new Error('Initial script execution timed out after 10 minutes'));
+        }, 10 * 60 * 1000);
+      });
+
+      // 更新账号的脚本执行次数和最后监听时间
+      await account.update({
+        scriptExecutionCount: 1,
+        lastMonitorTime: new Date(),
+        needMonitor: true // 自动启用监听
+      });
+
+      return true;
+    } catch (error) {
+      logger.error(`Error initializing account ${account.email}:`, error);
+
+      // 更新执行历史为失败
+      if (executionHistory) {
+        const executionTime = Date.now() - startTime;
+        await executionHistory.update({
+          status: 'failed',
+          error: error.message,
+          completedAt: new Date(),
+          executionTime: executionTime
+        });
+      }
+
+      // 更新 CommandExecution 为失败
+      if (commandExecution) {
+        await commandExecution.update({
+          status: 'failed',
+          error: error.message,
+          completedAt: new Date()
+        });
+      }
+
+      return false;
+    }
+  }
+
+  /**
+   * 获取监听状态
+   */
+  getStatus() {
+    return {
+      isRunning: this.isRunning,
+      interval: this.interval,
+      monitorInterval: this.monitorInterval,
+      activeMonitors: this.activeMonitors.size
+    };
+  }
+
+  /**
+   * 获取监听日志
+   */
+  async getLogs(params = {}) {
+    const { page = 1, pageSize = 20, accountId, status } = params;
+    const where = {};
+
+    if (accountId) where.accountId = accountId;
+    if (status) where.monitorStatus = status;
+
+    const offset = (page - 1) * pageSize;
+    const limit = parseInt(pageSize);
+
+    const { count, rows } = await GCloudMonitorLog.findAndCountAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset
+    });
+
+    return {
+      total: count,
+      page,
+      pageSize,
+      logs: rows
+    };
+  }
+
+  /**
+   * 获取监听统计
+   */
+  async getStats() {
+    const { Op } = require('sequelize');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const totalLogs = await GCloudMonitorLog.count();
+    const successLogs = await GCloudMonitorLog.count({ where: { monitorStatus: 'success' } });
+    const failedLogs = await GCloudMonitorLog.count({ where: { monitorStatus: 'failed' } });
+    const scriptExecutedLogs = await GCloudMonitorLog.count({ where: { scriptExecuted: true } });
+
+    const todayLogs = await GCloudMonitorLog.count({
+      where: {
+        createdAt: { [Op.gte]: today }
+      }
+    });
+
+    const activeAccounts = await GCloudAccount.count({
+      where: { needMonitor: true, isActive: true }
+    });
+
+    return {
+      total: totalLogs,
+      success: successLogs,
+      failed: failedLogs,
+      scriptExecuted: scriptExecutedLogs,
+      todayProcessed: todayLogs,
+      activeAccounts: activeAccounts,
+      monitorStatus: this.getStatus()
+    };
+  }
+}
+
+// 导出单例
+module.exports = new GCloudMonitorService();
