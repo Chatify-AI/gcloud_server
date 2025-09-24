@@ -287,11 +287,21 @@ const startServer = async () => {
       logger.info('GCloud monitor service started');
 
       // 启动全局渠道监控服务（监控非监听账号的渠道）
+      console.log('🌍 ENABLE_GLOBAL_CHANNEL_MONITOR:', process.env.ENABLE_GLOBAL_CHANNEL_MONITOR);
       if (process.env.ENABLE_GLOBAL_CHANNEL_MONITOR !== 'false') {
-        const globalChannelMonitorService = require('../services/globalChannelMonitorService');
-        globalChannelMonitorService.start();
-        console.log('Global channel monitor service started (30-second interval between cycles)');
-        logger.info('Global channel monitor service started (30-second interval between cycles)');
+        console.log('🌍 Loading global channel monitor service...');
+        try {
+          const globalChannelMonitorService = require('../services/globalChannelMonitorService');
+          console.log('🌍 Service loaded, calling start()...');
+          globalChannelMonitorService.start();
+          console.log('🌍 Global channel monitor service started (30-second interval between cycles)');
+          logger.info('🌍 Global channel monitor service started (30-second interval between cycles)');
+        } catch (error) {
+          console.error('🌍 Failed to start global channel monitor service:', error);
+          logger.error('🌍 Failed to start global channel monitor service:', error);
+        }
+      } else {
+        console.log('🌍 Global channel monitor service is DISABLED by environment variable');
       }
     });
 

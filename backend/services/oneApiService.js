@@ -53,6 +53,91 @@ class OneApiService {
   }
 
   /**
+   * 获取所有渠道（使用大页面尺寸）
+   */
+  async getAllChannels() {
+    try {
+      let allChannels = [];
+      let page = 1;
+      const pageSize = 100; // 使用更大的页面大小提高效率
+
+      logger.debug(`🌍 Starting to fetch all channels with pagination`);
+
+      while (true) {
+        const queryParams = new URLSearchParams({
+          p: page,
+          page_size: pageSize,
+          id_sort: true,
+          tag_mode: false
+        });
+
+        logger.debug(`🌍 Fetching page ${page}`);
+
+        const response = await axios.get(
+          `${this.baseUrl}/api/channel/?${queryParams}`,
+          {
+            headers: {
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'zh-CN,zh;q=0.9',
+              'Cache-Control': 'no-store',
+              'New-API-User': '1',
+              'Proxy-Connection': 'keep-alive',
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+              'X-Forwarded-Host': '104.194.9.201:11002',
+              'Authorization': `Bearer ${this.apiKey}`
+            },
+            timeout: 30000
+          }
+        );
+
+        if (!response.data || !response.data.success || !response.data.data) {
+          logger.error(`Failed to get channels page ${page}: ${response.data?.message || 'Unknown error'}`);
+          break;
+        }
+
+        const pageData = response.data.data;
+
+        // 添加当前页的渠道到结果中
+        if (pageData.items && Array.isArray(pageData.items)) {
+          if (pageData.items.length === 0) {
+            logger.debug(`🌍 Page ${page}: no more channels, stopping pagination`);
+            break;
+          }
+          allChannels = allChannels.concat(pageData.items);
+          logger.debug(`🌍 Page ${page}: got ${pageData.items.length} channels, total so far: ${allChannels.length}`);
+        } else {
+          logger.debug(`🌍 Page ${page}: no items found, stopping pagination`);
+          break;
+        }
+
+        page++;
+
+        // 避免无限循环的安全措施
+        if (page > 1000) {
+          logger.warn(`🌍 Reached maximum page limit (1000), stopping pagination`);
+          break;
+        }
+
+        // 页面间稍微延迟避免请求过快
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      logger.info(`🌍 Successfully fetched all ${allChannels.length} channels across ${page-1} pages`);
+
+      return {
+        success: true,
+        data: {
+          items: allChannels,
+          total: allChannels.length
+        }
+      };
+    } catch (error) {
+      logger.error('Error getting all channels:', error.message);
+      throw new Error(`获取所有渠道失败: ${error.message}`);
+    }
+  }
+
+  /**
    * 搜索渠道
    */
   async searchChannels(params = {}) {
@@ -498,7 +583,7 @@ class OneApiService {
           model_timeout_mapping: "",
           tag: "",
           status_code_mapping: "",
-          setting: "{\n  \"channel_rate_limit\": {\n    \"ChannelRequestRateLimitEnabled\": true,\n    \"ChannelRequestRateLimitDurationMinutes\": 1,\n    \"ChannelRequestRateLimitCount\": 10000,\n    \"ChannelRequestRateLimitSuccessCount\": 120,\n    \"ChannelRequestRateLimitFailureCount\": 10000\n  }\n}",
+          setting: "",
           key: key,
           group: "default,Gemini"
         }

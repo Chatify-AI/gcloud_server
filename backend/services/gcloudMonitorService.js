@@ -494,7 +494,7 @@ class GCloudMonitorService {
    * 测试单个渠道（带3次重试机制）
    */
   async testSingleChannelWithRetries(channel, accountEmail) {
-    const maxRetries = 3;
+    const maxRetries = 3; // 恢复3次重试
     const retryInterval = 10000; // 10秒
     const startTime = Date.now();
 
@@ -522,7 +522,7 @@ class GCloudMonitorService {
           timeout: 30000
         });
 
-        if (apiTest.success) {
+        if (apiTest && apiTest.success) {
           logger.info(`Channel ${channel.id} API test successful`);
           return {
             success: true,
@@ -541,7 +541,7 @@ class GCloudMonitorService {
         }
 
       } catch (error) {
-        logger.error(`Channel ${channel.id} attempt ${attempt} error:`, error.message);
+        logger.error(`Channel ${channel.id} attempt ${attempt} error: ${error.message}`);
 
         if (attempt < maxRetries) {
           await this.sleep(retryInterval);
