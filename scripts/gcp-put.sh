@@ -885,65 +885,103 @@ create_gemini_api_key() {
     return 0
 }
 
-# 配置Vertex服务账号并导出密钥
+# 配置Vertex服务账号并导出密钥 (采用Python逻辑)
 vertex_setup_service_account() {
     local project_id="$1"
-    local sa_email="${SERVICE_ACCOUNT_NAME}@${project_id}.iam.gserviceaccount.com"
+    local iteration="$2"  # 新增iteration参数
 
-    log "INFO" "检查Vertex服务账号: ${sa_email}"
+    # 使用与Python相同的命名规则
+    local sa_name="automation-sa-${iteration}"
+    local sa_email="${sa_name}@${project_id}.iam.gserviceaccount.com"
 
+    log "INFO" "为项目 ${project_id} 创建Vertex服务账号: ${sa_email}"
+
+    # 确保必要的API已启用 (与Python保持一致)
+    local apis_to_enable=("aiplatform.googleapis.com" "iam.googleapis.com")
+    for api in "${apis_to_enable[@]}"; do
+        log "INFO" "启用API: ${api}"
+        if ! gcloud services enable "$api" --project="$project_id" --quiet; then
+            log "WARN" "启用API失败: ${api}"
+        fi
+    done
+
+    # 等待API启用生效
+    sleep 2
+
+    # 创建服务账号 (允许已存在的情况)
     if ! gcloud iam service-accounts describe "$sa_email" --project="$project_id" >/dev/null 2>&1; then
-        log "INFO" "创建服务账号..."
-        if ! retry gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
-            --display-name="Vertex AI Service Account" \
+        log "INFO" "创建服务账号: ${sa_name}"
+        if ! gcloud iam service-accounts create "$sa_name" \
+            --display-name="Automation User ${iteration}" \
             --project="$project_id" \
             --quiet; then
             log "ERROR" "创建服务账号失败: ${sa_email}"
             return 1
         fi
     else
-        log "INFO" "服务账号已存在"
+        log "INFO" "服务账号已存在: ${sa_name}"
     fi
 
-    local roles=(
-        "roles/aiplatform.admin"
-        "roles/iam.serviceAccountUser"
-        "roles/iam.serviceAccountTokenCreator"
-        "roles/aiplatform.user"
-        "roles/storage.admin"
-        "roles/bigquery.admin"
-    )
+    # 等待服务账号创建完成
+    sleep 2
 
-    log "INFO" "分配Vertex相关IAM角色..."
-    for role in "${roles[@]}"; do
-        if retry gcloud projects add-iam-policy-binding "$project_id" \
+    # 只分配必要的权限 (与Python保持一致: 最小权限原则)
+    log "INFO" "分配aiplatform.user角色..."
+    local max_retries=3
+    local attempt=1
+
+    while [ $attempt -le $max_retries ]; do
+        if gcloud projects add-iam-policy-binding "$project_id" \
             --member="serviceAccount:${sa_email}" \
-            --role="$role" \
-            --quiet >/dev/null 2>&1; then
-            log "SUCCESS" "授予角色: ${role}"
+            --role="roles/aiplatform.user" \
+            --quiet; then
+            log "SUCCESS" "成功授予aiplatform.user角色"
+            break
         else
-            log "WARN" "授予角色失败: ${role}"
+            log "WARN" "授予角色失败，尝试 ${attempt}/${max_retries}，等待5秒后重试..."
+            if [ $attempt -lt $max_retries ]; then
+                sleep 5
+                attempt=$((attempt + 1))
+            else
+                log "ERROR" "授予角色最终失败"
+                return 1
+            fi
         fi
     done
 
-    log "INFO" "生成Vertex服务账号密钥..."
-    local vertex_filename
-    vertex_filename=$(generate_vertex_filename "$project_id") || return 1
+    # 生成密钥文件 (使用Python的命名规则)
+    local current_user_email
+    current_user_email=$(get_current_user_email)
+    local safe_email="${current_user_email//@/_at_}"
+    safe_email="${safe_email//\./_dot_}"
+    local vertex_filename="${safe_email}-${project_id}-${iteration}.json"
     local key_file="${KEY_DIR}/${vertex_filename}"
 
-    if retry gcloud iam service-accounts keys create "$key_file" \
-        --iam-account="$sa_email" \
-        --project="$project_id" \
-        --quiet; then
-        chmod 600 "$key_file"
-        VERTEX_KEYS_GENERATED=$((VERTEX_KEYS_GENERATED + 1))
-        log "SUCCESS" "Vertex密钥已保存: ${key_file}"
-        return 0
-    else
-        log "ERROR" "生成Vertex密钥失败: ${sa_email}"
-        rm -f "$key_file" 2>/dev/null || true
-        return 1
-    fi
+    log "INFO" "生成Vertex服务账号密钥: ${vertex_filename}"
+
+    # 重试机制创建密钥
+    attempt=1
+    while [ $attempt -le $max_retries ]; do
+        if gcloud iam service-accounts keys create "$key_file" \
+            --iam-account="$sa_email" \
+            --project="$project_id" \
+            --quiet; then
+            chmod 600 "$key_file"
+            VERTEX_KEYS_GENERATED=$((VERTEX_KEYS_GENERATED + 1))
+            log "SUCCESS" "Vertex密钥已保存: ${key_file}"
+            return 0
+        else
+            log "WARN" "密钥创建失败，尝试 ${attempt}/${max_retries}，等待5秒后重试..."
+            if [ $attempt -lt $max_retries ]; then
+                sleep 5
+                attempt=$((attempt + 1))
+            else
+                log "ERROR" "密钥创建最终失败: ${sa_email}"
+                rm -f "$key_file" 2>/dev/null || true
+                return 1
+            fi
+        fi
+    done
 }
 
 # 自动获取结算账户
@@ -1358,7 +1396,7 @@ configure_projects() {
 
         if should_process_vertex; then
             log "INFO" "配置Vertex服务账号..."
-            if ! vertex_setup_service_account "$project_id"; then
+            if ! vertex_setup_service_account "$project_id" "$current"; then
                 log "ERROR" "Vertex配置失败: ${project_id}"
                 project_success=false
             fi
