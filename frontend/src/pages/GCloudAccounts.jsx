@@ -204,7 +204,7 @@ function GCloudAccounts() {
     setAddingAccount(true)
     try {
       const response = await axios.post('/api/gcloud-accounts/add', {
-        authCode: authCode.trim(),
+        code: authCode.trim(),
         authId: authId
       })
 
