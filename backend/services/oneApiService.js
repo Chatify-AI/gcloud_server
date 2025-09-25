@@ -1024,9 +1024,11 @@ class OneApiService {
 
       const allChannels = searchResult.data.items || searchResult.data.data || [];
 
-      // 过滤出该账户的渠道
+      // 过滤出该账户的渠道（排除已经包含_suspend的渠道）
       const channels = allChannels.filter(channel => {
         if (!channel.name) return false;
+        // 排除名称包含 _suspend 的渠道，避免重复处理
+        if (channel.name.includes('_suspend')) return false;
         return channel.name === accountEmail || channel.name.includes(accountEmail.split('@')[0]);
       });
 
