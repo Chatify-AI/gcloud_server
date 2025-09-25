@@ -687,7 +687,7 @@ function GCloudAccounts() {
               </Typography>
               <Button
                 size="small"
-                startIcon={<ContentCopyIcon />}
+                startIcon={<CopyIcon />}
                 onClick={() => {
                   navigator.clipboard.writeText(authUrl)
                   toast.success('链接已复制到剪贴板!')
