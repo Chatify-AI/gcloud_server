@@ -99,6 +99,27 @@ app.get('/api/stats/overview', async (req, res) => {
 });
 
 /**
+ * 获取特定账号的消费数据
+ */
+app.get('/api/account-consumption/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const decodedEmail = decodeURIComponent(email);
+
+    console.log(`Getting consumption data for account: ${decodedEmail}`);
+
+    const result = await channelStatsService.getAccountConsumption(decodedEmail);
+    res.json(result);
+  } catch (error) {
+    console.error(`Error getting consumption for ${req.params.email}:`, error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+/**
  * 获取单个账户详情
  */
 app.get('/api/stats/account/:email', async (req, res) => {

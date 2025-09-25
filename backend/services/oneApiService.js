@@ -402,10 +402,10 @@ class OneApiService {
    * @param {number} channelId - 渠道ID
    * @param {string} model - 模型名称，默认gemini-2.5-pro
    * @param {number} minutes - 检查最近多少分钟内的日志，默认1分钟
-   * @param {number} limit - 返回记录条数限制，默认30条
+   * @param {number} limit - 返回记录条数限制，默认1条
    * @returns {Object} 包含是否有日志和日志详情
    */
-  async checkChannelRecentLogs(channelId, model = 'gemini-2.5-pro', minutes = 1, limit = 30) {
+  async checkChannelRecentLogs(channelId, model = 'gemini-2.5-pro', minutes = 1, limit = 1) {
     try {
       // 计算时间范围（Unix时间戳，秒）
       const now = Math.floor(Date.now() / 1000);
@@ -803,15 +803,16 @@ class OneApiService {
    * 查询渠道近期消费记录
    * @param {number} channelId - 渠道ID
    * @param {number} minutes - 查询多少分钟内的记录，默认1分钟
+   * @param {string} model - 模型名称，默认查询所有模型
    * @returns {Promise<{hasConsumption: boolean, records: Array, total: number}>}
    */
-  async getChannelConsumption(channelId, minutes = 1) {
+  async getChannelConsumption(channelId, minutes = 1, model = '') {
     try {
       const now = Date.now();
       const startTime = Math.floor((now - minutes * 60 * 1000) / 1000); // 转换为秒级时间戳
       const endTime = Math.floor(now / 1000);
 
-      logger.info(`Checking consumption for channel ${channelId} from ${startTime} to ${endTime} (${minutes} minutes)`);
+      logger.info(`Checking consumption for channel ${channelId} from ${startTime} to ${endTime} (${minutes} minutes)${model ? ` for model ${model}` : ' for all models'}`);
 
       const queryParams = new URLSearchParams({
         p: 1,
@@ -823,7 +824,7 @@ class OneApiService {
         username: '',
         user_id: '',
         token_name: '',
-        model_name: '',
+        model_name: model,
         group: ''
       });
 
@@ -889,15 +890,187 @@ class OneApiService {
    * 检查渠道是否有近期消费（简化版本，只返回boolean）
    * @param {number} channelId - 渠道ID
    * @param {number} minutes - 查询多少分钟内的记录，默认1分钟
+   * @param {string} model - 模型名称，默认查询所有模型
    * @returns {Promise<boolean>}
    */
-  async hasRecentConsumption(channelId, minutes = 1) {
+  async hasRecentConsumption(channelId, minutes = 1, model = '') {
     try {
-      const result = await this.getChannelConsumption(channelId, minutes);
+      const result = await this.getChannelConsumption(channelId, minutes, model);
       return result.hasConsumption;
     } catch (error) {
       logger.error(`Error checking recent consumption for channel ${channelId}:`, error.message);
       return false;
+    }
+  }
+
+  /**
+   * 获取渠道详细信息
+   * @param {number} channelId - 渠道ID
+   * @returns {Promise<Object>}
+   */
+  async getChannelDetail(channelId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/api/channel/${channelId}`,
+        {
+          headers: this.getHeaders(),
+          timeout: 10000
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error(`Failed to get channel ${channelId} detail:`, error.message);
+      throw new Error(`获取渠道详情失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 禁用渠道并在名称后添加 _suspend
+   * @param {number} channelId - 渠道ID
+   * @returns {Promise<Object>}
+   */
+  async suspendChannel(channelId) {
+    try {
+      // 先获取渠道详情
+      const channelDetail = await this.getChannelDetail(channelId);
+
+      if (!channelDetail.success || !channelDetail.data) {
+        throw new Error('Failed to get channel detail');
+      }
+
+      const channel = channelDetail.data;
+
+      // 检查名称是否已经包含 _suspend，避免重复添加
+      let newName = channel.name;
+      if (!newName.endsWith('_suspend')) {
+        newName = `${newName}_suspend`;
+      }
+
+      // 准备更新数据，保留所有原有设置，只修改名称和状态
+      const updateData = {
+        id: channel.id,
+        type: channel.type,
+        name: newName, // 添加 _suspend 后缀
+        key: channel.key,
+        models: channel.models,
+        auto_ban: channel.auto_ban || 0,
+        status: 2, // 禁用渠道
+        failure_timeout_ban_limit: channel.failure_timeout_ban_limit || 12000,
+        enable_timestamp_granularity: channel.enable_timestamp_granularity || 0,
+        enable_cloud_tools: channel.enable_cloud_tools || 0,
+        groups: channel.groups || ["default"],
+        priority: channel.priority || 3,
+        weight: channel.weight || 0,
+        price: channel.price || 0,
+        multi_key_mode: channel.multi_key_mode || "random",
+        base_url: channel.base_url || "",
+        test_model: channel.test_model || "",
+        model_mapping: channel.model_mapping || "",
+        return_model_mapping: channel.return_model_mapping || "",
+        model_timeout_mapping: channel.model_timeout_mapping || "",
+        tag: channel.tag || "",
+        status_code_mapping: channel.status_code_mapping || "",
+        setting: channel.setting || "",
+        group: channel.group || "default",
+        other: channel.other || "",
+        max_input_tokens: channel.max_input_tokens || 0,
+        openai_organization: channel.openai_organization || ""
+      };
+
+      logger.info(`Suspending channel ${channelId}: ${channel.name} -> ${newName}, status -> disabled`);
+
+      const response = await axios.put(
+        `${this.baseUrl}/api/channel/`,
+        updateData,
+        {
+          headers: this.getHeaders(),
+          timeout: 10000
+        }
+      );
+
+      if (response.data.success) {
+        logger.info(`Successfully suspended channel ${channelId}: ${channel.name} -> ${newName}`);
+      } else {
+        logger.warn(`Failed to suspend channel ${channelId}: ${response.data.message}`);
+      }
+
+      return response.data;
+    } catch (error) {
+      logger.error(`Failed to suspend channel ${channelId}:`, error.message);
+      throw new Error(`挂起渠道失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 批量挂起账户的所有渠道
+   * @param {string} accountEmail - 账户邮箱
+   * @returns {Promise<{suspended: Array, failed: Array}>}
+   */
+  async suspendAccountChannels(accountEmail) {
+    try {
+      logger.info(`Starting to suspend all channels for account: ${accountEmail}`);
+
+      // 搜索该账户的所有渠道
+      const searchResult = await this.searchChannels({
+        keyword: accountEmail,
+        page: 1,
+        pageSize: 100
+      });
+
+      if (!searchResult.success || !searchResult.data) {
+        throw new Error('Failed to get account channels');
+      }
+
+      const allChannels = searchResult.data.items || searchResult.data.data || [];
+
+      // 过滤出该账户的渠道
+      const channels = allChannels.filter(channel => {
+        if (!channel.name) return false;
+        return channel.name === accountEmail || channel.name.includes(accountEmail.split('@')[0]);
+      });
+
+      logger.info(`Found ${channels.length} channels for account ${accountEmail}`);
+
+      const suspended = [];
+      const failed = [];
+
+      // 逐个挂起渠道
+      for (const channel of channels) {
+        try {
+          const result = await this.suspendChannel(channel.id);
+          if (result.success) {
+            suspended.push({
+              id: channel.id,
+              name: channel.name,
+              newName: `${channel.name.endsWith('_suspend') ? channel.name : channel.name + '_suspend'}`
+            });
+          } else {
+            failed.push({
+              id: channel.id,
+              name: channel.name,
+              error: result.message
+            });
+          }
+        } catch (error) {
+          failed.push({
+            id: channel.id,
+            name: channel.name,
+            error: error.message
+          });
+        }
+      }
+
+      logger.info(`Suspension completed for ${accountEmail}: ${suspended.length} suspended, ${failed.length} failed`);
+
+      return {
+        suspended,
+        failed,
+        total: channels.length
+      };
+    } catch (error) {
+      logger.error(`Failed to suspend channels for account ${accountEmail}:`, error.message);
+      throw new Error(`批量挂起账户渠道失败: ${error.message}`);
     }
   }
 }

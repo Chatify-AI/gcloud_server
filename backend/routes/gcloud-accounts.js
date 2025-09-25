@@ -2,7 +2,7 @@ const express = require('express');
 const { GCloudAccount } = require('../models');
 const { authMiddleware } = require('../middleware/auth');
 const gcloudAuth = require('../services/gcloudAuth');
-const gcloudExecutor = require('../services/gcloudExecutor');
+const gcloudExecutor = require('../services/gcloudExecutorClient');
 const logger = require('../src/utils/logger');
 const gcloudMonitorService = require('../services/gcloudMonitorService');
 
@@ -24,15 +24,70 @@ setInterval(() => {
 // 需要管理员权限
 router.use(authMiddleware);
 
-// 获取所有Google Cloud账号
+// 获取所有Google Cloud账号（支持分页和搜索）
 router.get('/', async (req, res) => {
   try {
-    const accounts = await GCloudAccount.findAll({
-      attributes: ['id', 'email', 'displayName', 'projectId', 'projectName', 'isActive', 'lastUsed', 'createdAt', 'configDir', 'configName', 'needMonitor', 'scriptExecutionCount', 'lastMonitorTime'],
-      order: [['createdAt', 'DESC']]
-    });
+    const {
+      page = 1,
+      pageSize = 50,
+      search = '',
+      showAll = false
+    } = req.query;
 
-    res.json({ accounts });
+    const currentPage = parseInt(page);
+    const currentPageSize = showAll === 'true' ? undefined : parseInt(pageSize);
+
+    // 构建搜索条件
+    const whereCondition = {};
+    if (search && search.trim()) {
+      const { Op } = require('sequelize');
+      const searchTerm = search.trim();
+      whereCondition[Op.or] = [
+        { email: { [Op.like]: `%${searchTerm}%` } },
+        { displayName: { [Op.like]: `%${searchTerm}%` } },
+        { projectId: { [Op.like]: `%${searchTerm}%` } },
+        { projectName: { [Op.like]: `%${searchTerm}%` } }
+      ];
+    }
+
+    const queryOptions = {
+      attributes: [
+        'id', 'email', 'displayName', 'projectId', 'projectName',
+        'isActive', 'lastUsed', 'createdAt', 'configDir', 'configName',
+        'needMonitor', 'scriptExecutionCount', 'lastMonitorTime'
+      ],
+      where: whereCondition,
+      order: [['createdAt', 'DESC']]
+    };
+
+    let accounts;
+    let totalCount;
+
+    if (showAll === 'true') {
+      // 获取所有数据，不分页
+      accounts = await GCloudAccount.findAll(queryOptions);
+      totalCount = accounts.length;
+    } else {
+      // 分页查询
+      const offset = (currentPage - 1) * currentPageSize;
+      queryOptions.limit = currentPageSize;
+      queryOptions.offset = offset;
+
+      const { count, rows } = await GCloudAccount.findAndCountAll(queryOptions);
+      accounts = rows;
+      totalCount = count;
+    }
+
+    res.json({
+      accounts,
+      pagination: {
+        page: currentPage,
+        pageSize: showAll === 'true' ? totalCount : currentPageSize,
+        total: totalCount,
+        totalPages: showAll === 'true' ? 1 : Math.ceil(totalCount / currentPageSize),
+        showAll: showAll === 'true'
+      }
+    });
   } catch (error) {
     logger.error('Error fetching GCloud accounts:', error);
     res.status(500).json({ error: 'Failed to fetch accounts' });
@@ -250,7 +305,7 @@ router.post('/:id/refresh', async (req, res) => {
   }
 });
 
-// 更新账号执行次数
+// 更新账号执行次数 (PATCH)
 router.patch('/:id/execution-count', async (req, res) => {
   try {
     const { id } = req.params;
@@ -282,8 +337,72 @@ router.patch('/:id/execution-count', async (req, res) => {
   }
 });
 
-// 更新账号监听状态
+// 更新账号执行次数 (PUT) - 兼容性端点
+router.put('/:id/execution-count', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { scriptExecutionCount } = req.body;
+
+    const account = await GCloudAccount.findByPk(id);
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    await account.update({
+      scriptExecutionCount: parseInt(scriptExecutionCount) || 0
+    });
+
+    logger.info(`Updated execution count for account ${account.email}: ${scriptExecutionCount}`);
+
+    res.json({
+      success: true,
+      message: `Execution count updated to ${scriptExecutionCount}`,
+      account: {
+        id: account.id,
+        email: account.email,
+        scriptExecutionCount: account.scriptExecutionCount
+      }
+    });
+  } catch (error) {
+    logger.error('Error updating execution count:', error);
+    res.status(500).json({ error: 'Failed to update execution count' });
+  }
+});
+
+// 更新账号监听状态 (PATCH)
 router.patch('/:id/monitor', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { needMonitor } = req.body;
+
+    const account = await GCloudAccount.findByPk(id);
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    await account.update({
+      needMonitor: needMonitor
+    });
+
+    logger.info(`Updated monitor status for account ${account.email}: ${needMonitor}`);
+
+    res.json({
+      success: true,
+      message: `Monitor ${needMonitor ? 'enabled' : 'disabled'} for account ${account.email}`,
+      account: {
+        id: account.id,
+        email: account.email,
+        needMonitor: account.needMonitor
+      }
+    });
+  } catch (error) {
+    logger.error('Error updating monitor status:', error);
+    res.status(500).json({ error: 'Failed to update monitor status' });
+  }
+});
+
+// 更新账号监听状态 (PUT) - 兼容性端点
+router.put('/:id/monitor', async (req, res) => {
   try {
     const { id } = req.params;
     const { needMonitor } = req.body;
@@ -375,6 +494,109 @@ router.get('/:id/monitor-logs', async (req, res) => {
   } catch (error) {
     logger.error('Error fetching monitor logs:', error);
     res.status(500).json({ error: 'Failed to fetch monitor logs' });
+  }
+});
+
+// 获取账号的消费数据
+router.get('/:id/consumption', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const account = await GCloudAccount.findByPk(id);
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    // 调用channel-stats-service获取该邮箱的消费数据
+    const axios = require('axios');
+    const channelStatsServiceUrl = process.env.CHANNEL_STATS_SERVICE_URL || 'http://localhost:4000';
+
+    try {
+      const response = await axios.get(`${channelStatsServiceUrl}/api/account-consumption/${encodeURIComponent(account.email)}`, {
+        timeout: 10000
+      });
+
+      if (response.data && response.data.success) {
+        res.json({
+          success: true,
+          accountId: id,
+          email: account.email,
+          consumption: response.data.consumption
+        });
+      } else {
+        res.json({
+          success: false,
+          accountId: id,
+          email: account.email,
+          message: response.data?.message || 'No consumption data found'
+        });
+      }
+    } catch (serviceError) {
+      logger.error(`Error fetching consumption for ${account.email}:`, serviceError.message);
+      res.json({
+        success: false,
+        accountId: id,
+        email: account.email,
+        error: serviceError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Error in consumption endpoint:', error);
+    res.status(500).json({ error: 'Failed to fetch consumption data' });
+  }
+});
+
+// 批量获取多个账号的消费数据
+router.post('/batch-consumption', async (req, res) => {
+  try {
+    const { accountIds } = req.body;
+
+    if (!accountIds || !Array.isArray(accountIds)) {
+      return res.status(400).json({ error: 'accountIds array is required' });
+    }
+
+    const accounts = await GCloudAccount.findAll({
+      where: { id: accountIds },
+      attributes: ['id', 'email']
+    });
+
+    const axios = require('axios');
+    const channelStatsServiceUrl = process.env.CHANNEL_STATS_SERVICE_URL || 'http://localhost:4000';
+
+    // 并发获取所有账号的消费数据
+    const consumptionPromises = accounts.map(async (account) => {
+      try {
+        const response = await axios.get(`${channelStatsServiceUrl}/api/account-consumption/${encodeURIComponent(account.email)}`, {
+          timeout: 10000
+        });
+
+        return {
+          accountId: account.id,
+          email: account.email,
+          success: true,
+          consumption: response.data?.success ? response.data.consumption : null,
+          message: response.data?.message
+        };
+      } catch (error) {
+        logger.error(`Error fetching consumption for ${account.email}:`, error.message);
+        return {
+          accountId: account.id,
+          email: account.email,
+          success: false,
+          error: error.message
+        };
+      }
+    });
+
+    const results = await Promise.all(consumptionPromises);
+
+    res.json({
+      success: true,
+      results: results
+    });
+  } catch (error) {
+    logger.error('Error in batch consumption endpoint:', error);
+    res.status(500).json({ error: 'Failed to fetch batch consumption data' });
   }
 });
 

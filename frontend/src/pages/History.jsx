@@ -10,6 +10,7 @@ import {
   TableHead,
   TableRow,
   TablePagination,
+  Pagination,
   Chip,
   IconButton,
   Dialog,
@@ -21,7 +22,12 @@ import {
   CircularProgress,
   TextField,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  InputAdornment
 } from '@mui/material'
 import {
   Visibility as ViewIcon,
@@ -34,7 +40,8 @@ import {
   ContentCopy as CopyIcon,
   Fullscreen as FullscreenIcon,
   Close as CloseIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Search as SearchIcon
 } from '@mui/icons-material'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -43,8 +50,6 @@ function History() {
   const [executions, setExecutions] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState(0)
-  const [rowsPerPage, setRowsPerPage] = useState(10)
   const [selectedExecution, setSelectedExecution] = useState(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [fullscreenDialog, setFullscreenDialog] = useState(false)
@@ -54,13 +59,26 @@ function History() {
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [refreshInterval, setRefreshInterval] = useState(null)
 
-  useEffect(() => {
-    fetchExecutions()
-  }, [page, rowsPerPage])
+  // 分页和搜索相关状态
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 20,
+    total: 0,
+    totalPages: 0,
+    showAll: false
+  })
+  const [emailFilter, setEmailFilter] = useState('')
+  const [emailFilterInput, setEmailFilterInput] = useState('')
+  const [fullscreenAutoRefresh, setFullscreenAutoRefresh] = useState(false)
+  const fullscreenTextFieldRef = React.useRef(null)
 
   useEffect(() => {
-    // 自动刷新处理
-    if (autoRefresh && selectedExecution && selectedExecution.status === 'running') {
+    fetchExecutions()
+  }, [pagination.page, pagination.pageSize, pagination.showAll, emailFilter])
+
+  useEffect(() => {
+    // 自动刷新处理 - 包括普通对话框和全屏对话框
+    if ((autoRefresh || fullscreenAutoRefresh) && selectedExecution && selectedExecution.status === 'running') {
       const interval = setInterval(() => {
         refreshExecutionDetails()
       }, 3000) // 每3秒刷新一次
@@ -72,19 +90,45 @@ function History() {
         setRefreshInterval(null)
       }
     }
-  }, [autoRefresh, selectedExecution])
+  }, [autoRefresh, fullscreenAutoRefresh, selectedExecution])
+
+  // 自动滚动到底部
+  const scrollToBottom = () => {
+    if (fullscreenTextFieldRef.current) {
+      const textareaElement = fullscreenTextFieldRef.current.querySelector('textarea')
+      if (textareaElement) {
+        textareaElement.scrollTop = textareaElement.scrollHeight
+      }
+    }
+  }
+
+  // 当内容更新时自动滚动到底部
+  useEffect(() => {
+    if (fullscreenDialog && fullscreenContent) {
+      setTimeout(scrollToBottom, 100) // 延迟一点确保内容已渲染
+    }
+  }, [fullscreenContent, fullscreenDialog])
 
   const fetchExecutions = async () => {
     setLoading(true)
     try {
-      const response = await axios.get('/api/commands/executions', {
-        params: {
-          limit: rowsPerPage,
-          offset: page * rowsPerPage
-        }
-      })
+      const params = {
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        showAll: pagination.showAll
+      }
+
+      if (emailFilter && emailFilter.trim()) {
+        params.email = emailFilter.trim()
+      }
+
+      const response = await axios.get('/api/commands/executions', { params })
       setExecutions(response.data.executions)
       setTotal(response.data.total)
+      setPagination(prev => ({
+        ...prev,
+        ...response.data.pagination
+      }))
     } catch (error) {
       console.error('Error fetching executions:', error)
       toast.error('Failed to fetch execution history')
@@ -125,11 +169,22 @@ function History() {
     setRefreshing(true)
     try {
       const response = await axios.get(`/api/commands/executions/${selectedExecution.id}`)
-      setSelectedExecution(response.data.execution)
+      const updatedExecution = response.data.execution
+      setSelectedExecution(updatedExecution)
+
+      // 如果全屏对话框打开且显示的是输出内容，更新全屏内容
+      if (fullscreenDialog && fullscreenTitle === '命令输出' && updatedExecution.output) {
+        setFullscreenContent(updatedExecution.output)
+      }
+      // 如果显示的是错误内容，更新错误内容
+      else if (fullscreenDialog && fullscreenTitle === '错误信息' && updatedExecution.error) {
+        setFullscreenContent(updatedExecution.error)
+      }
 
       // 如果任务完成了，停止自动刷新
-      if (response.data.execution.status !== 'running' && autoRefresh) {
+      if (updatedExecution.status !== 'running' && (autoRefresh || fullscreenAutoRefresh)) {
         setAutoRefresh(false)
+        setFullscreenAutoRefresh(false)
         toast.info('任务已完成，停止自动刷新')
       }
     } catch (error) {
@@ -139,13 +194,44 @@ function History() {
     }
   }
 
+  const handleEmailFilter = () => {
+    setEmailFilter(emailFilterInput)
+    setPagination(prev => ({ ...prev, page: 1 }))
+  }
+
+  const handleKeyPress = (event) => {
+    if (event.key === 'Enter') {
+      handleEmailFilter()
+    }
+  }
+
+  const handlePageChange = (event, newPage) => {
+    setPagination(prev => ({ ...prev, page: newPage }))
+  }
+
+  const handlePageSizeChange = (event) => {
+    const newPageSize = event.target.value
+    const showAll = newPageSize === 'all'
+    setPagination(prev => ({
+      ...prev,
+      pageSize: showAll ? 20 : newPageSize,
+      showAll,
+      page: 1
+    }))
+  }
+
   const handleChangePage = (event, newPage) => {
-    setPage(newPage)
+    setPagination(prev => ({ ...prev, page: newPage + 1 }))
   }
 
   const handleChangeRowsPerPage = (event) => {
-    setRowsPerPage(parseInt(event.target.value, 10))
-    setPage(0)
+    const newPageSize = parseInt(event.target.value, 10)
+    setPagination(prev => ({
+      ...prev,
+      pageSize: newPageSize,
+      page: 1,
+      showAll: false
+    }))
   }
 
   const getStatusIcon = (status) => {
@@ -198,6 +284,10 @@ function History() {
     setFullscreenContent(content)
     setFullscreenTitle(title)
     setFullscreenDialog(true)
+    // 如果是运行中的任务，默认开启全屏自动刷新
+    if (selectedExecution && selectedExecution.status === 'running') {
+      setFullscreenAutoRefresh(true)
+    }
   }
 
   const handleCopyToClipboard = async (text, label = '内容') => {
@@ -234,6 +324,52 @@ function History() {
         执行历史记录
       </Typography>
 
+      {/* 搜索和控制区域 */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+          <TextField
+            placeholder="按邮箱筛选..."
+            value={emailFilterInput}
+            onChange={(e) => setEmailFilterInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            size="small"
+            sx={{ minWidth: 300, flexGrow: 1 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              )
+            }}
+          />
+          <Button
+            variant="contained"
+            onClick={handleEmailFilter}
+            startIcon={<SearchIcon />}
+          >
+            筛选
+          </Button>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>每页显示</InputLabel>
+            <Select
+              value={pagination.showAll ? 'all' : pagination.pageSize}
+              onChange={handlePageSizeChange}
+              label="每页显示"
+            >
+              <MenuItem value={10}>10</MenuItem>
+              <MenuItem value={20}>20</MenuItem>
+              <MenuItem value={50}>50</MenuItem>
+              <MenuItem value={100}>100</MenuItem>
+              <MenuItem value="all">全部</MenuItem>
+            </Select>
+          </FormControl>
+          {loading && (
+            <CircularProgress size={20} />
+          )}
+        </Box>
+      </Paper>
+
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
@@ -250,8 +386,11 @@ function History() {
           <TableBody>
             {executions.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center">
-                  暂无执行记录
+                <TableCell colSpan={7} align="center">
+                  {emailFilter ?
+                    `未找到包含 "${emailFilter}" 的执行记录` :
+                    '暂无执行记录'
+                  }
                 </TableCell>
               </TableRow>
             ) : (
@@ -311,16 +450,39 @@ function History() {
             )}
           </TableBody>
         </Table>
-        <TablePagination
-          rowsPerPageOptions={[5, 10, 25]}
-          component="div"
-          count={total}
-          rowsPerPage={rowsPerPage}
-          page={page}
-          onPageChange={handleChangePage}
-          onRowsPerPageChange={handleChangeRowsPerPage}
-        />
+
+        {/* 旧版TablePagination保持兼容性 */}
+        {!pagination.showAll && (
+          <TablePagination
+            rowsPerPageOptions={[10, 20, 50, 100]}
+            component="div"
+            count={total}
+            rowsPerPage={pagination.pageSize}
+            page={pagination.page - 1}
+            onPageChange={handleChangePage}
+            onRowsPerPageChange={handleChangeRowsPerPage}
+            labelDisplayedRows={({ from, to, count }) => `第 ${from}-${to} 条，共 ${count} 条`}
+            labelRowsPerPage="每页显示："
+          />
+        )}
       </TableContainer>
+
+      {/* 新版分页控件 */}
+      {!pagination.showAll && pagination.totalPages > 1 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={2} gap={2}>
+          <Pagination
+            count={pagination.totalPages}
+            page={pagination.page}
+            onChange={handlePageChange}
+            color="primary"
+            size="large"
+          />
+          <Typography variant="body2" color="text.secondary">
+            第 {pagination.page} 页，共 {pagination.totalPages} 页
+            ({total} 条记录)
+          </Typography>
+        </Box>
+      )}
 
       <Dialog
         open={detailsOpen}
@@ -508,7 +670,43 @@ function History() {
           <Box display="flex" alignItems="center">
             <Typography variant="h6" sx={{ flexGrow: 1 }}>
               {fullscreenTitle}
+              {selectedExecution && (
+                <Chip
+                  icon={getStatusIcon(selectedExecution.status)}
+                  label={selectedExecution.status}
+                  color={getStatusColor(selectedExecution.status)}
+                  size="small"
+                  sx={{ ml: 2 }}
+                />
+              )}
             </Typography>
+
+            {/* 自动刷新控制 - 仅在任务运行中显示 */}
+            {selectedExecution && selectedExecution.status === 'running' && (
+              <>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={fullscreenAutoRefresh}
+                      onChange={(e) => setFullscreenAutoRefresh(e.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="自动刷新"
+                  sx={{ mr: 2, color: 'white' }}
+                />
+                <IconButton
+                  color="inherit"
+                  onClick={refreshExecutionDetails}
+                  disabled={refreshing}
+                  title="手动刷新"
+                  size="small"
+                >
+                  {refreshing ? <CircularProgress size={20} color="inherit" /> : <RefreshIcon />}
+                </IconButton>
+              </>
+            )}
+
             <IconButton
               color="inherit"
               onClick={() => handleCopyToClipboard(fullscreenContent, fullscreenTitle)}
@@ -518,7 +716,10 @@ function History() {
             </IconButton>
             <IconButton
               color="inherit"
-              onClick={() => setFullscreenDialog(false)}
+              onClick={() => {
+                setFullscreenDialog(false)
+                setFullscreenAutoRefresh(false)
+              }}
               title="关闭"
             >
               <CloseIcon />
@@ -527,6 +728,7 @@ function History() {
         </DialogTitle>
         <DialogContent sx={{ backgroundColor: '#1e1e1e', p: 0 }}>
           <TextField
+            ref={fullscreenTextFieldRef}
             fullWidth
             multiline
             value={fullscreenContent}

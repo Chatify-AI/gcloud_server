@@ -1,7 +1,7 @@
 const express = require('express');
 const { CommandExecution, GCloudAccount } = require('../models');
 const { combinedAuthMiddleware } = require('../middleware/combinedAuth');
-const gcloudExecutor = require('../services/gcloudExecutor');
+const gcloudExecutor = require('../services/gcloudExecutorClient');
 const logger = require('../src/utils/logger');
 
 const router = express.Router();
@@ -76,28 +76,72 @@ router.post('/cloud-shell', async (req, res) => {
 // 获取执行历史
 router.get('/executions', async (req, res) => {
   try {
-    const { limit = 20, offset = 0, accountId } = req.query;
+    const {
+      limit = 20,
+      offset = 0,
+      accountId,
+      email,
+      page = 1,
+      pageSize = 20,
+      showAll = false
+    } = req.query;
+
+    const currentPage = parseInt(page);
+    const currentPageSize = showAll === 'true' ? undefined : parseInt(pageSize);
 
     const where = {};
+    const includeWhere = {};
+
     if (accountId) {
       where.accountId = accountId;
     }
 
-    const executions = await CommandExecution.findAll({
+    // 邮箱筛选
+    if (email && email.trim()) {
+      const { Op } = require('sequelize');
+      includeWhere.email = { [Op.like]: `%${email.trim()}%` };
+    }
+
+    const queryOptions = {
       where,
       include: [{
         model: GCloudAccount,
         as: 'account',
-        attributes: ['email', 'displayName', 'projectId']
+        attributes: ['email', 'displayName', 'projectId'],
+        where: Object.keys(includeWhere).length > 0 ? includeWhere : undefined,
+        required: Object.keys(includeWhere).length > 0 // INNER JOIN when filtering by email
       }],
-      order: [['createdAt', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
+      order: [['createdAt', 'DESC']]
+    };
+
+    let executions;
+    let total;
+
+    if (showAll === 'true') {
+      // 获取所有数据，不分页
+      executions = await CommandExecution.findAll(queryOptions);
+      total = executions.length;
+    } else {
+      // 分页查询
+      const offsetValue = (currentPage - 1) * currentPageSize;
+      queryOptions.limit = currentPageSize;
+      queryOptions.offset = offsetValue;
+
+      const { count, rows } = await CommandExecution.findAndCountAll(queryOptions);
+      executions = rows;
+      total = count;
+    }
+
+    res.json({
+      executions,
+      total,
+      pagination: {
+        page: currentPage,
+        pageSize: showAll === 'true' ? total : currentPageSize,
+        totalPages: showAll === 'true' ? 1 : Math.ceil(total / currentPageSize),
+        showAll: showAll === 'true'
+      }
     });
-
-    const total = await CommandExecution.count({ where });
-
-    res.json({ executions, total });
   } catch (error) {
     logger.error('Error fetching executions:', error);
     res.status(500).json({ error: 'Failed to fetch executions' });

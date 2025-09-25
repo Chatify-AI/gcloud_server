@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   Container,
   Paper,
@@ -22,7 +22,13 @@ import {
   Avatar,
   Switch,
   FormControlLabel,
-  Tooltip
+  Tooltip,
+  Pagination,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  InputAdornment
 } from '@mui/material'
 import {
   Add as AddIcon,
@@ -36,7 +42,9 @@ import {
   Close as CloseIcon,
   ExpandMore as ExpandMoreIcon,
   Info as InfoIcon,
-  BugReport as BugReportIcon
+  BugReport as BugReportIcon,
+  Search as SearchIcon,
+  AttachMoney as MoneyIcon
 } from '@mui/icons-material'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -51,30 +59,124 @@ function GCloudAccounts() {
   const [editAccount, setEditAccount] = useState(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [addingAccount, setAddingAccount] = useState(false)
-  const [generatingUrl, setGeneratingUrl] = useState(false) // Add generating URL state
+  const [generatingUrl, setGeneratingUrl] = useState(false)
   const [monitorLogsDialogOpen, setMonitorLogsDialogOpen] = useState(false)
   const [selectedAccountLogs, setSelectedAccountLogs] = useState(null)
   const [monitorLogs, setMonitorLogs] = useState([])
   const [logsLoading, setLogsLoading] = useState(false)
-  const [editingExecutionCount, setEditingExecutionCount] = useState({})
-  const [tempExecutionCount, setTempExecutionCount] = useState({})
+  const [executionCountDialog, setExecutionCountDialog] = useState(false)
+  const [editingAccount, setEditingAccount] = useState(null)
+  const [tempExecutionCount, setTempExecutionCount] = useState(0)
   const [testDetailsDialog, setTestDetailsDialog] = useState(false)
   const [selectedTestDetails, setSelectedTestDetails] = useState(null)
 
+  // 分页和搜索相关状态
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    totalPages: 0,
+    showAll: false
+  })
+  const [searchTerm, setSearchTerm] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+
+  // 消费数据相关状态
+  const [consumptionData, setConsumptionData] = useState({})
+  const [loadingConsumption, setLoadingConsumption] = useState({})
+
   useEffect(() => {
     fetchAccounts()
-  }, [])
+  }, [pagination.page, pagination.pageSize, pagination.showAll, searchTerm])
 
   const fetchAccounts = async () => {
     try {
-      const response = await axios.get('/api/gcloud-accounts')
+      setLoading(true)
+      const params = {
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        showAll: pagination.showAll,
+        search: searchTerm
+      }
+
+      const response = await axios.get('/api/gcloud-accounts', { params })
       setAccounts(response.data.accounts)
+      setPagination(prev => ({
+        ...prev,
+        ...response.data.pagination
+      }))
+
+      // 自动异步获取消费数据
+      if (response.data.accounts && response.data.accounts.length > 0) {
+        fetchConsumptionData(response.data.accounts)
+      }
     } catch (error) {
       console.error('Error fetching accounts:', error)
       toast.error('获取Google Cloud账户失败')
     } finally {
       setLoading(false)
     }
+  }
+
+  const fetchConsumptionData = async (accountList) => {
+    const accountIds = accountList.map(acc => acc.id)
+
+    // 设置加载状态
+    const loadingState = {}
+    accountIds.forEach(id => {
+      loadingState[id] = true
+    })
+    setLoadingConsumption(loadingState)
+
+    try {
+      const response = await axios.post('/api/gcloud-accounts/batch-consumption', {
+        accountIds
+      })
+
+      if (response.data.success) {
+        const consumptionMap = {}
+        response.data.results.forEach(result => {
+          consumptionMap[result.accountId] = {
+            success: result.success,
+            data: result.consumption,
+            error: result.error,
+            message: result.message
+          }
+        })
+        setConsumptionData(prev => ({ ...prev, ...consumptionMap }))
+      }
+    } catch (error) {
+      console.error('Error fetching consumption data:', error)
+    } finally {
+      // 清除加载状态
+      setLoadingConsumption({})
+    }
+  }
+
+  const handleSearch = () => {
+    setSearchTerm(searchInput)
+    setPagination(prev => ({ ...prev, page: 1 }))
+  }
+
+  const handleKeyPress = (event) => {
+    if (event.key === 'Enter') {
+      handleSearch()
+    }
+  }
+
+  const handlePageChange = (event, newPage) => {
+    setPagination(prev => ({ ...prev, page: newPage }))
+  }
+
+  const handlePageSizeChange = (event) => {
+    const newPageSize = event.target.value
+    const showAll = newPageSize === 'all'
+    setPagination(prev => ({
+      ...prev,
+      pageSize: showAll ? 50 : newPageSize,
+      showAll,
+      page: 1
+    }))
   }
 
   const handleGenerateAuthUrl = async () => {
@@ -100,20 +202,21 @@ function GCloudAccounts() {
     }
 
     setAddingAccount(true)
-
     try {
       const response = await axios.post('/api/gcloud-accounts/add', {
-        code: authCode,
-        authId: authId // Include authId in the request
+        authCode: authCode.trim(),
+        authId: authId
       })
 
       if (response.data.success) {
-        toast.success(response.data.message)
+        toast.success('Google Cloud账户添加成功!')
         setDialogOpen(false)
         setAuthCode('')
         setAuthUrl('')
-        setAuthId('') // Clear authId
-        fetchAccounts()
+        setAuthId('')
+        await fetchAccounts()
+      } else {
+        toast.error(response.data.message || '添加账户失败')
       }
     } catch (error) {
       console.error('Error adding account:', error)
@@ -124,7 +227,7 @@ function GCloudAccounts() {
   }
 
   const handleDeleteAccount = async (accountId) => {
-    if (!window.confirm('确定要删除这个Google Cloud账户吗？')) {
+    if (!window.confirm('确定要删除这个账户吗？')) {
       return
     }
 
@@ -138,71 +241,65 @@ function GCloudAccounts() {
     }
   }
 
-  const handleRefreshToken = async (accountId) => {
+  const handleRefreshAccount = async (accountId) => {
     try {
       await axios.post(`/api/gcloud-accounts/${accountId}/refresh`)
-      toast.success('令牌刷新成功')
+      toast.success('账户令牌刷新成功')
       fetchAccounts()
     } catch (error) {
-      console.error('Error refreshing token:', error)
+      console.error('Error refreshing account:', error)
       toast.error('刷新令牌失败')
     }
   }
 
-  const handleMonitorToggle = async (accountId, currentStatus) => {
+  const handleToggleMonitoring = async (accountId, needMonitor) => {
     try {
-      const response = await axios.patch(
-        `/api/gcloud-accounts/${accountId}/monitor`,
-        { needMonitor: !currentStatus }
-      )
+      await axios.put(`/api/gcloud-accounts/${accountId}/monitor`, {
+        needMonitor: !needMonitor
+      })
+      toast.success(`监听已${!needMonitor ? '开启' : '关闭'}`)
 
-      if (response.data.success) {
-        toast.success(response.data.message)
-        fetchAccounts()
-      }
+      // 只更新本地状态，不重新获取消费数据
+      setAccounts(prev => prev.map(account =>
+        account.id === accountId
+          ? { ...account, needMonitor: !needMonitor }
+          : account
+      ))
     } catch (error) {
-      console.error('Error toggling monitor status:', error)
-      toast.error('更新监听状态失败: ' + (error.response?.data?.error || error.message))
+      console.error('Error toggling monitoring:', error)
+      toast.error('切换监听状态失败')
     }
   }
 
-  const handleExecutionCountEdit = (accountId, currentCount) => {
-    setEditingExecutionCount({ ...editingExecutionCount, [accountId]: true })
-    setTempExecutionCount({ ...tempExecutionCount, [accountId]: currentCount })
+  const handleEditExecutionCount = (account) => {
+    setEditingAccount(account)
+    setTempExecutionCount(account.scriptExecutionCount || 0)
+    setExecutionCountDialog(true)
   }
 
-  const handleExecutionCountSave = async (accountId) => {
+  const handleSaveExecutionCount = async () => {
     try {
-      const newCount = parseInt(tempExecutionCount[accountId]) || 0
-      const response = await axios.patch(
-        `/api/gcloud-accounts/${accountId}/execution-count`,
-        { scriptExecutionCount: newCount }
+      await axios.put(
+        `/api/gcloud-accounts/${editingAccount.id}/execution-count`,
+        { scriptExecutionCount: parseInt(tempExecutionCount) }
       )
+      setExecutionCountDialog(false)
+      toast.success('执行次数更新成功')
 
-      if (response.data.success) {
-        toast.success('执行次数已更新')
-        setEditingExecutionCount({ ...editingExecutionCount, [accountId]: false })
-        fetchAccounts()
-      }
+      // 只更新本地状态，不重新获取消费数据
+      setAccounts(prev => prev.map(account =>
+        account.id === editingAccount.id
+          ? { ...account, scriptExecutionCount: parseInt(tempExecutionCount) }
+          : account
+      ))
+
+      setEditingAccount(null)
     } catch (error) {
       console.error('Error updating execution count:', error)
-      toast.error('更新执行次数失败: ' + (error.response?.data?.error || error.message))
+      toast.error('更新执行次数失败')
     }
   }
 
-  const handleExecutionCountCancel = (accountId) => {
-    setEditingExecutionCount({ ...editingExecutionCount, [accountId]: false })
-    setTempExecutionCount({ ...tempExecutionCount, [accountId]: undefined })
-  }
-
-  const handleEditAccount = (account) => {
-    setEditAccount({
-      ...account,
-      projectId: account.projectId || '',
-      projectName: account.projectName || ''
-    })
-    setEditDialogOpen(true)
-  }
 
   const handleViewMonitorLogs = async (account) => {
     setSelectedAccountLogs(account)
@@ -214,19 +311,20 @@ function GCloudAccounts() {
       setMonitorLogs(response.data.logs || [])
     } catch (error) {
       console.error('Error fetching monitor logs:', error)
-      toast.error('获取监听历史失败')
+      toast.error('获取监听日志失败')
     } finally {
       setLogsLoading(false)
     }
   }
 
+  const handleEditAccount = (account) => {
+    setEditAccount(account)
+    setEditDialogOpen(true)
+  }
+
   const handleUpdateAccount = async () => {
     try {
-      await axios.put(`/api/gcloud-accounts/${editAccount.id}`, {
-        projectId: editAccount.projectId,
-        projectName: editAccount.projectName,
-        isActive: editAccount.isActive
-      })
+      await axios.put(`/api/gcloud-accounts/${editAccount.id}`, editAccount)
       toast.success('账户更新成功')
       setEditDialogOpen(false)
       fetchAccounts()
@@ -236,99 +334,65 @@ function GCloudAccounts() {
     }
   }
 
-  const handleCopyUrl = async () => {
-    try {
-      // 方案1: 尝试现代 clipboard API
-      if (navigator.clipboard && window.isSecureContext) {
-        try {
-          await navigator.clipboard.writeText(authUrl)
-          toast.success('授权链接已复制到剪贴板!')
-          return
-        } catch (err) {
-          console.log('Clipboard API failed, trying fallback:', err)
-        }
-      }
+  const renderConsumptionCell = (account) => {
+    const consumption = consumptionData[account.id]
+    const isLoading = loadingConsumption[account.id]
 
-      // 方案2: 降级方案 - 使用 textarea + execCommand
-      const textArea = document.createElement('textarea')
-      textArea.value = authUrl
-      textArea.style.position = 'fixed'
-      textArea.style.top = '0'
-      textArea.style.left = '0'
-      textArea.style.opacity = '0'
-      textArea.style.pointerEvents = 'none'
-      textArea.setAttribute('readonly', '')
-
-      document.body.appendChild(textArea)
-
-      // 选择文本
-      textArea.select()
-      textArea.setSelectionRange(0, 99999) // 对移动设备
-
-      try {
-        const successful = document.execCommand('copy')
-        if (successful) {
-          toast.success('授权链接已复制到剪贴板!')
-        } else {
-          throw new Error('execCommand returned false')
-        }
-      } catch (err) {
-        console.error('execCommand copy failed:', err)
-        // 方案3: 手动选择文本，让用户自己复制
-        showManualCopyDialog()
-      } finally {
-        document.body.removeChild(textArea)
-      }
-
-    } catch (error) {
-      console.error('Error copying to clipboard:', error)
-      showManualCopyDialog()
+    if (isLoading) {
+      return (
+        <Box display="flex" alignItems="center" gap={1}>
+          <CircularProgress size={16} />
+          <Typography variant="caption">Loading...</Typography>
+        </Box>
+      )
     }
+
+    if (!consumption) {
+      return (
+        <Typography variant="caption" color="text.secondary">
+          No data
+        </Typography>
+      )
+    }
+
+    if (!consumption.success) {
+      return (
+        <Tooltip title={consumption.error || consumption.message || 'Failed to load'}>
+          <Typography variant="caption" color="error">
+            Error
+          </Typography>
+        </Tooltip>
+      )
+    }
+
+    if (consumption.data) {
+      const amount = consumption.data.totalAmount || 0
+      return (
+        <Box display="flex" alignItems="center" gap={0.5}>
+          <MoneyIcon fontSize="small" color="primary" />
+          <Typography variant="body2" fontWeight="medium" color="primary">
+            ${amount.toFixed(4)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            ({consumption.data.totalChannels} channels)
+          </Typography>
+        </Box>
+      )
+    }
+
+    return (
+      <Typography variant="caption" color="text.secondary">
+        No consumption
+      </Typography>
+    )
   }
 
-  const showManualCopyDialog = () => {
-    // 显示一个对话框让用户手动复制
-    const copyDialog = document.createElement('div')
-    copyDialog.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-      z-index: 10000;
-      max-width: 80%;
-      word-break: break-all;
-    `
-
-    copyDialog.innerHTML = `
-      <div style="margin-bottom: 10px; font-weight: bold;">请手动复制授权链接:</div>
-      <textarea readonly style="width: 100%; height: 100px; margin-bottom: 10px; font-size: 12px;">${authUrl}</textarea>
-      <div style="text-align: right;">
-        <button onclick="this.parentElement.parentElement.remove()" style="padding: 8px 16px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">关闭</button>
-      </div>
-    `
-
-    document.body.appendChild(copyDialog)
-
-    // 自动选择文本
-    const textarea = copyDialog.querySelector('textarea')
-    textarea.focus()
-    textarea.select()
-
-    // 5秒后自动关闭
-    setTimeout(() => {
-      if (copyDialog.parentNode) {
-        copyDialog.remove()
-      }
-    }, 10000)
-
-    toast.info('自动复制失败，请手动复制链接')
+  const handleViewTestDetails = (testDetails) => {
+    setSelectedTestDetails(testDetails)
+    setTestDetailsDialog(true)
   }
 
-  if (loading) {
+  if (loading && accounts.length === 0) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
         <CircularProgress />
@@ -339,191 +403,247 @@ function GCloudAccounts() {
   return (
     <Container maxWidth="lg">
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Box display="flex" alignItems="center" gap={2}>
-          <CloudIcon color="primary" sx={{ fontSize: 32 }} />
-          <Typography variant="h4">
-            Google Cloud 账户
-          </Typography>
-        </Box>
+        <Typography variant="h4">
+          Google Cloud 账户管理
+        </Typography>
         <Button
           variant="contained"
-          startIcon={generatingUrl ? <CircularProgress size={20} color="inherit" /> : <AddIcon />}
+          startIcon={<AddIcon />}
           onClick={handleGenerateAuthUrl}
           disabled={generatingUrl}
         >
-          {generatingUrl ? '生成中...' : '添加账户'}
+          {generatingUrl ? <CircularProgress size={20} /> : '添加账户'}
         </Button>
       </Box>
 
-      <Paper sx={{ mb: 2, p: 2 }}>
-        <Typography variant="body2" color="textSecondary">
-          总账户数: {accounts.length} |
-          活跃: {accounts.filter(a => a.isActive).length} |
-          未激活: {accounts.filter(a => !a.isActive).length}
-        </Typography>
+      {/* 搜索和控制区域 */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+          <TextField
+            placeholder="搜索邮箱、项目ID或项目名称..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            size="small"
+            sx={{ minWidth: 300, flexGrow: 1 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              )
+            }}
+          />
+          <Button
+            variant="contained"
+            onClick={handleSearch}
+            startIcon={<SearchIcon />}
+          >
+            搜索
+          </Button>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>页面大小</InputLabel>
+            <Select
+              value={pagination.showAll ? 'all' : pagination.pageSize}
+              onChange={handlePageSizeChange}
+              label="页面大小"
+            >
+              <MenuItem value={50}>50条</MenuItem>
+              <MenuItem value={100}>100条</MenuItem>
+              <MenuItem value="all">全部</MenuItem>
+            </Select>
+          </FormControl>
+          {loading && (
+            <CircularProgress size={20} />
+          )}
+        </Box>
       </Paper>
 
       <TableContainer component={Paper}>
-        <Table>
+        <Table size="small" sx={{ tableLayout: 'fixed' }}>
           <TableHead>
             <TableRow>
-              <TableCell>账户</TableCell>
-              <TableCell>项目</TableCell>
-              <TableCell>状态</TableCell>
-              <TableCell>监听</TableCell>
-              <TableCell>执行次数</TableCell>
-              <TableCell>最后使用</TableCell>
-              <TableCell>添加时间</TableCell>
-              <TableCell align="right">操作</TableCell>
+              <TableCell sx={{ width: '20%', minWidth: 180 }}>邮箱</TableCell>
+              <TableCell sx={{ width: '15%', minWidth: 120 }}>项目信息</TableCell>
+              <TableCell sx={{ width: '8%', minWidth: 60 }}>状态</TableCell>
+              <TableCell sx={{ width: '12%', minWidth: 100 }}>消费金额</TableCell>
+              <TableCell sx={{ width: '10%', minWidth: 80 }}>监听状态</TableCell>
+              <TableCell sx={{ width: '10%', minWidth: 80 }}>脚本次数</TableCell>
+              <TableCell sx={{ width: '15%', minWidth: 120 }}>上次监听时间</TableCell>
+              <TableCell align="right" sx={{ width: '10%', minWidth: 120 }}>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {accounts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
-                  <CloudIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                  <Typography variant="h6" color="textSecondary">
-                    尚未添加Google Cloud账户
-                  </Typography>
-                  <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-                    点击"添加账户"连接您的第一个Google Cloud账户
-                  </Typography>
+                <TableCell colSpan={8} align="center">
+                  {searchTerm ?
+                    `没有找到匹配 "${searchTerm}" 的账户。请尝试其他搜索词。` :
+                    '没有找到账户。点击"添加账户"来连接您的第一个Google Cloud账户。'
+                  }
                 </TableCell>
               </TableRow>
             ) : (
               accounts.map((account) => (
-                <TableRow key={account.id} hover>
-                  <TableCell>
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main' }}>
-                        {account.email.charAt(0).toUpperCase()}
+                <TableRow key={account.id}>
+                  <TableCell sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <Box display="flex" alignItems="center" gap={0.5}>
+                      <Avatar sx={{ width: 20, height: 20, fontSize: '0.7rem' }}>
+                        {account.email?.[0]?.toUpperCase()}
                       </Avatar>
-                      <Box>
-                        <Typography variant="body2" fontWeight="bold">
-                          {account.displayName || account.email.split('@')[0]}
-                        </Typography>
-                        <Typography variant="caption" color="textSecondary">
+                      <Box sx={{ overflow: 'hidden' }}>
+                        <Typography
+                          variant="body2"
+                          fontWeight="medium"
+                          sx={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            fontSize: '0.8rem'
+                          }}
+                          title={account.email}
+                        >
                           {account.email}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontSize: '0.7rem' }}
+                        >
+                          ID: {account.id}
                         </Typography>
                       </Box>
                     </Box>
                   </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">
-                      {account.projectName || account.projectId || '未配置'}
-                    </Typography>
-                    {account.projectId && (
-                      <Typography variant="caption" color="textSecondary">
-                        {account.projectId}
+                  <TableCell sx={{ overflow: 'hidden' }}>
+                    <Box>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontSize: '0.8rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                        title={account.projectName}
+                      >
+                        {account.projectName || 'N/A'}
                       </Typography>
-                    )}
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{
+                          fontSize: '0.7rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                        title={account.projectId}
+                      >
+                        {account.projectId || 'No Project ID'}
+                      </Typography>
+                    </Box>
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={account.isActive ? '活跃' : '未激活'}
+                      label={account.isActive ? '活跃' : '非活跃'}
                       color={account.isActive ? 'success' : 'default'}
                       size="small"
                     />
                   </TableCell>
                   <TableCell>
-                    <Tooltip title={account.needMonitor ? '监听已开启' : '监听已关闭'}>
+                    {renderConsumptionCell(account)}
+                  </TableCell>
+                  <TableCell sx={{ textAlign: 'center' }}>
+                    <Box display="flex" flexDirection="column" alignItems="center" gap={0.5}>
                       <Switch
                         checked={account.needMonitor || false}
-                        onChange={() => handleMonitorToggle(account.id, account.needMonitor)}
-                        color="primary"
+                        onChange={() => handleToggleMonitoring(account.id, account.needMonitor)}
                         size="small"
                       />
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {editingExecutionCount[account.id] ? (
-                        <>
-                          <TextField
-                            size="small"
-                            type="number"
-                            value={tempExecutionCount[account.id] ?? account.scriptExecutionCount ?? 0}
-                            onChange={(e) => setTempExecutionCount({ ...tempExecutionCount, [account.id]: e.target.value })}
-                            sx={{ width: 60 }}
-                            inputProps={{ min: 0 }}
-                          />
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            onClick={() => handleExecutionCountSave(account.id)}
-                          >
-                            <CheckIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            onClick={() => handleExecutionCountCancel(account.id)}
-                          >
-                            <CloseIcon fontSize="small" />
-                          </IconButton>
-                        </>
-                      ) : (
-                        <>
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              color: account.scriptExecutionCount === 0 ? 'warning.main' : 'text.primary',
-                              fontWeight: account.scriptExecutionCount === 0 ? 'bold' : 'normal'
-                            }}
-                          >
-                            {account.scriptExecutionCount ?? 0}
-                          </Typography>
-                          <IconButton
-                            size="small"
-                            onClick={() => handleExecutionCountEdit(account.id, account.scriptExecutionCount ?? 0)}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </>
-                      )}
+                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                        {account.needMonitor ? '开启' : '关闭'}
+                      </Typography>
                     </Box>
                   </TableCell>
                   <TableCell>
-                    {account.lastUsed
-                      ? new Date(account.lastUsed).toLocaleString()
-                      : 'Never'}
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Chip
+                        label={account.scriptExecutionCount || 0}
+                        size="small"
+                        color={
+                          (account.scriptExecutionCount || 0) >= 4
+                            ? 'error'
+                            : (account.scriptExecutionCount || 0) >= 3
+                              ? 'warning'
+                              : 'default'
+                        }
+                        onClick={() => handleEditExecutionCount(account)}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    </Box>
                   </TableCell>
                   <TableCell>
-                    {new Date(account.createdAt).toLocaleDateString()}
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontSize: '0.7rem',
+                        display: 'block'
+                      }}
+                    >
+                      {account.lastMonitorTime ? (
+                        <>
+                          <div>{new Date(account.lastMonitorTime).toLocaleDateString()}</div>
+                          <div>{new Date(account.lastMonitorTime).toLocaleTimeString()}</div>
+                        </>
+                      ) : (
+                        '从未监听'
+                      )}
+                    </Typography>
                   </TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="查看监听历史">
-                      <IconButton
-                        color="primary"
-                        onClick={() => handleViewMonitorLogs(account)}
-                        size="small"
-                      >
-                        <HistoryIcon />
-                      </IconButton>
-                    </Tooltip>
-                    <IconButton
-                      color="primary"
-                      onClick={() => handleEditAccount(account)}
-                      title="Edit"
-                      size="small"
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      color="primary"
-                      onClick={() => handleRefreshToken(account.id)}
-                      title="Refresh Token"
-                      size="small"
-                    >
-                      <RefreshIcon />
-                    </IconButton>
-                    <IconButton
-                      color="error"
-                      onClick={() => handleDeleteAccount(account.id)}
-                      title="Delete"
-                      size="small"
-                    >
-                      <DeleteIcon />
-                    </IconButton>
+                  <TableCell align="right" sx={{ padding: '4px 8px' }}>
+                    <Box display="flex" gap={0.5} justifyContent="flex-end">
+                      <Tooltip title="监听日志">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleViewMonitorLogs(account)}
+                          sx={{ padding: '4px' }}
+                        >
+                          <HistoryIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="编辑">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => handleEditAccount(account)}
+                          sx={{ padding: '4px' }}
+                        >
+                          <EditIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="刷新">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => handleRefreshAccount(account.id)}
+                          sx={{ padding: '4px' }}
+                        >
+                          <RefreshIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="删除">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleDeleteAccount(account.id)}
+                          sx={{ padding: '4px' }}
+                        >
+                          <DeleteIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))
@@ -532,113 +652,110 @@ function GCloudAccounts() {
         </Table>
       </TableContainer>
 
-      {/* Add Account Dialog */}
-      <Dialog open={dialogOpen} onClose={() => !addingAccount && setDialogOpen(false)} maxWidth="sm" fullWidth>
+      {/* 分页控件 */}
+      {!pagination.showAll && pagination.totalPages > 1 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={2} gap={2}>
+          <Pagination
+            count={pagination.totalPages}
+            page={pagination.page}
+            onChange={handlePageChange}
+            color="primary"
+            size="large"
+          />
+          <Typography variant="body2" color="text.secondary">
+            第 {pagination.page} 页，共 {pagination.totalPages} 页
+            (总共 {pagination.total} 个账户)
+          </Typography>
+        </Box>
+      )}
+
+      {/* 添加账户对话框 */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>添加 Google Cloud 账户</DialogTitle>
         <DialogContent>
-          <Typography variant="body2" gutterBottom>
-            请按照以下步骤添加新的 Google Cloud 账户：
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            第一步：点击下面的链接进行授权
           </Typography>
-          <Box sx={{ pl: 2, mb: 2 }}>
-            <Typography variant="body2">
-              1. 复制下方的授权链接
-            </Typography>
-            <Typography variant="body2">
-              2. 在新标签页中打开链接
-            </Typography>
-            <Typography variant="body2">
-              3. 使用您的 Google 账户登录
-            </Typography>
-            <Typography variant="body2">
-              4. 授权所需的权限
-            </Typography>
-            <Typography variant="body2">
-              5. 复制授权码
-            </Typography>
-            <Typography variant="body2">
-              6. 将授权码粘贴到下方并点击"添加账户"
-            </Typography>
-          </Box>
 
           {authUrl && (
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="body2" gutterBottom>
-                授权链接：
+            <Paper sx={{ p: 2, mb: 2, bgcolor: 'grey.50' }}>
+              <Typography variant="subtitle2" gutterBottom>
+                授权链接:
               </Typography>
-              <TextField
-                fullWidth
-                value={authUrl}
-                variant="outlined"
+              <Typography variant="body2" sx={{ wordBreak: 'break-all', mb: 1 }}>
+                {authUrl}
+              </Typography>
+              <Button
                 size="small"
-                InputProps={{
-                  readOnly: true,
-                  sx: { fontFamily: 'monospace', fontSize: 12 }
+                startIcon={<ContentCopyIcon />}
+                onClick={() => {
+                  navigator.clipboard.writeText(authUrl)
+                  toast.success('链接已复制到剪贴板!')
                 }}
-                sx={{ mb: 1 }}
-                onClick={(e) => e.target.select()}
-              />
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <Button
-                  size="small"
-                  variant="contained"
-                  startIcon={<CopyIcon />}
-                  onClick={handleCopyUrl}
-                >
-                  复制链接
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  href={authUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  在新标签页打开
-                </Button>
-              </Box>
-            </Box>
+              >
+                复制链接
+              </Button>
+              <Button
+                size="small"
+                startIcon={<Cloud />}
+                onClick={() => window.open(authUrl, '_blank')}
+                sx={{ ml: 1 }}
+              >
+                打开链接
+              </Button>
+            </Paper>
           )}
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            第二步：完成授权后，将授权码粘贴到下面
+          </Typography>
 
           <TextField
             fullWidth
             label="授权码"
             value={authCode}
             onChange={(e) => setAuthCode(e.target.value)}
-            placeholder="请将授权码粘贴到这里"
+            placeholder="请粘贴从Google获得的授权码"
             multiline
-            rows={3}
-            sx={{ mt: 2 }}
-            disabled={addingAccount}
+            rows={2}
+            sx={{ mt: 1 }}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)} disabled={addingAccount}>
+          <Button onClick={() => setDialogOpen(false)}>
             取消
           </Button>
           <Button
             onClick={handleAddAccount}
             variant="contained"
-            disabled={addingAccount || !authCode.trim()}
+            disabled={!authCode.trim() || addingAccount}
           >
-            {addingAccount ? <CircularProgress size={24} /> : '添加账户'}
+            {addingAccount ? <CircularProgress size={20} /> : '添加账户'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Edit Account Dialog */}
+      {/* 编辑账户对话框 */}
       <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>编辑账户</DialogTitle>
+        <DialogTitle>编辑账户信息</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
-            label="邮箱"
+            label="邮箱地址"
             value={editAccount?.email || ''}
             disabled
             sx={{ mb: 2, mt: 1 }}
           />
           <TextField
             fullWidth
-            label="项目 ID"
+            label="显示名称"
+            value={editAccount?.displayName || ''}
+            onChange={(e) => setEditAccount({ ...editAccount, displayName: e.target.value })}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            label="项目ID"
             value={editAccount?.projectId || ''}
             onChange={(e) => setEditAccount({ ...editAccount, projectId: e.target.value })}
             sx={{ mb: 2 }}
@@ -654,25 +771,21 @@ function GCloudAccounts() {
         <DialogActions>
           <Button onClick={() => setEditDialogOpen(false)}>取消</Button>
           <Button onClick={handleUpdateAccount} variant="contained">
-            更新
+            保存
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Monitor Logs Dialog */}
-      <Dialog open={monitorLogsDialogOpen} onClose={() => setMonitorLogsDialogOpen(false)} maxWidth="md" fullWidth>
+      {/* 监听日志对话框 */}
+      <Dialog open={monitorLogsDialogOpen} onClose={() => setMonitorLogsDialogOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>
-          监听历史 - {selectedAccountLogs?.email}
+          监听日志 - {selectedAccountLogs?.email}
         </DialogTitle>
         <DialogContent>
           {logsLoading ? (
-            <Box display="flex" justifyContent="center" py={3}>
+            <Box display="flex" justifyContent="center" p={3}>
               <CircularProgress />
             </Box>
-          ) : monitorLogs.length === 0 ? (
-            <Typography color="textSecondary" align="center" py={3}>
-              暂无监听记录
-            </Typography>
           ) : (
             <TableContainer>
               <Table size="small">
@@ -680,63 +793,67 @@ function GCloudAccounts() {
                   <TableRow>
                     <TableCell>时间</TableCell>
                     <TableCell>状态</TableCell>
-                    <TableCell>测试渠道</TableCell>
-                    <TableCell>成功渠道</TableCell>
-                    <TableCell>脚本执行</TableCell>
                     <TableCell>消息</TableCell>
-                    <TableCell>测试详情</TableCell>
+                    <TableCell>渠道信息</TableCell>
+                    <TableCell>脚本执行</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {monitorLogs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell>
-                        {new Date(log.startTime).toLocaleString()}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={log.monitorStatus}
-                          size="small"
-                          color={
-                            log.monitorStatus === 'success' ? 'success' :
-                            log.monitorStatus === 'failed' ? 'error' :
-                            log.monitorStatus === 'script_executed' ? 'warning' :
-                            'default'
-                          }
-                        />
-                      </TableCell>
-                      <TableCell>{log.testedChannels || 0}</TableCell>
-                      <TableCell>{log.successfulChannels || 0}</TableCell>
-                      <TableCell>
-                        {log.scriptExecuted ? (
-                          <Chip label={log.scriptType || 'gemini'} size="small" color="primary" />
-                        ) : '-'}
-                      </TableCell>
-                      <TableCell>
-                        <Typography variant="caption" style={{ wordBreak: 'break-word' }}>
-                          {log.message || '-'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        {log.testDetails ? (
-                          <Tooltip title="查看测试详情">
-                            <IconButton
-                              size="small"
-                              color="primary"
-                              onClick={() => {
-                                setSelectedTestDetails(log.testDetails)
-                                setTestDetailsDialog(true)
-                              }}
-                            >
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        ) : (
-                          '-'
-                        )}
+                  {monitorLogs.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center">
+                        暂无监听日志
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    monitorLogs.map((log) => (
+                      <TableRow key={log.id}>
+                        <TableCell>
+                          <Typography variant="caption">
+                            {new Date(log.createdAt).toLocaleString()}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={log.monitorStatus}
+                            size="small"
+                            color={
+                              log.monitorStatus === 'success' ? 'success' :
+                              log.monitorStatus === 'failed' ? 'error' : 'default'
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {log.message}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          {log.testDetails && (
+                            <Button
+                              size="small"
+                              onClick={() => handleViewTestDetails(JSON.parse(log.testDetails))}
+                            >
+                              查看详情 ({log.testedChannels}个渠道)
+                            </Button>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {log.scriptExecuted ? (
+                            <Chip
+                              label={`已执行 (${log.scriptType})`}
+                              size="small"
+                              color="primary"
+                            />
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              未执行
+                            </Typography>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -747,137 +864,99 @@ function GCloudAccounts() {
         </DialogActions>
       </Dialog>
 
-      {/* Test Details Dialog */}
-      <Dialog open={testDetailsDialog} onClose={() => setTestDetailsDialog(false)} maxWidth="lg" fullWidth>
-        <DialogTitle>
-          <Box display="flex" alignItems="center" justifyContent="space-between">
-            <Box display="flex" alignItems="center">
-              <BugReportIcon sx={{ mr: 1 }} />
-              测试详细信息
-            </Box>
-            <IconButton onClick={() => setTestDetailsDialog(false)} size="small">
-              <CloseIcon />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent dividers>
-          {selectedTestDetails ? (
-            <Box>
-              {/* 概要信息 */}
-              <Typography variant="subtitle2" gutterBottom color="primary">
-                测试概要
-              </Typography>
-              <Paper sx={{ p: 2, mb: 2, bgcolor: 'grey.50' }}>
-                <Typography variant="body2">
-                  总测试渠道数: {Array.isArray(selectedTestDetails) ? selectedTestDetails.length : 0}
-                </Typography>
-                <Typography variant="body2" color="success.main">
-                  成功: {Array.isArray(selectedTestDetails) ? selectedTestDetails.filter(d => d.success).length : 0}
-                </Typography>
-                <Typography variant="body2" color="error.main">
-                  失败: {Array.isArray(selectedTestDetails) ? selectedTestDetails.filter(d => !d.success).length : 0}
-                </Typography>
-              </Paper>
-
-              {/* 详细测试结果 */}
-              <Typography variant="subtitle2" gutterBottom color="primary">
-                详细测试结果
-              </Typography>
-              <TableContainer component={Paper}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>渠道ID</TableCell>
-                      <TableCell>渠道名称</TableCell>
-                      <TableCell>状态</TableCell>
-                      <TableCell>耗时(ms)</TableCell>
-                      <TableCell>消息/错误</TableCell>
-                      <TableCell>操作</TableCell>
+      {/* 测试详情对话框 */}
+      <Dialog open={testDetailsDialog} onClose={() => setTestDetailsDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>渠道测试详情</DialogTitle>
+        <DialogContent>
+          {selectedTestDetails && (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>渠道ID</TableCell>
+                    <TableCell>渠道名称</TableCell>
+                    <TableCell>测试结果</TableCell>
+                    <TableCell>尝试次数</TableCell>
+                    <TableCell>耗时</TableCell>
+                    <TableCell>失败原因</TableCell>
+                    <TableCell>状态</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {selectedTestDetails.map((detail, index) => (
+                    <TableRow key={index}>
+                      <TableCell>{detail.channelId}</TableCell>
+                      <TableCell>{detail.channelName}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={detail.success ? '成功' : '失败'}
+                          size="small"
+                          color={detail.success ? 'success' : 'error'}
+                        />
+                      </TableCell>
+                      <TableCell>{detail.attempts}</TableCell>
+                      <TableCell>{detail.totalDuration}ms</TableCell>
+                      <TableCell>
+                        <Typography variant="caption">
+                          {detail.reason}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        {detail.disabled && (
+                          <Chip label="已禁用" size="small" color="warning" />
+                        )}
+                      </TableCell>
                     </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {Array.isArray(selectedTestDetails) && selectedTestDetails.map((detail, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{detail.channelId}</TableCell>
-                        <TableCell>{detail.channelName}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={detail.success ? '成功' : '失败'}
-                            size="small"
-                            color={detail.success ? 'success' : 'error'}
-                            icon={detail.success ? <CheckIcon /> : <CloseIcon />}
-                          />
-                        </TableCell>
-                        <TableCell>{detail.duration || detail.testDuration || '-'}</TableCell>
-                        <TableCell>
-                          <Typography variant="caption" sx={{
-                            maxWidth: 300,
-                            display: 'block',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis'
-                          }}>
-                            {detail.message || '-'}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title="查看完整响应">
-                            <IconButton
-                              size="small"
-                              onClick={() => {
-                                const apiResponse = detail.apiResponse || detail;
-                                const formatted = JSON.stringify(apiResponse, null, 2)
-                                navigator.clipboard.writeText(formatted)
-                                toast.success('已复制完整响应到剪贴板')
-                              }}
-                            >
-                              <CopyIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-
-              {/* 原始JSON数据 */}
-              <Box mt={2}>
-                <Typography variant="subtitle2" gutterBottom color="primary">
-                  原始数据 (JSON)
-                </Typography>
-                <Paper sx={{ p: 1, bgcolor: 'grey.900', maxHeight: 300, overflow: 'auto' }}>
-                  <pre style={{
-                    color: '#00ff00',
-                    margin: 0,
-                    fontSize: '12px',
-                    fontFamily: 'monospace'
-                  }}>
-                    {JSON.stringify(selectedTestDetails, null, 2)}
-                  </pre>
-                </Paper>
-              </Box>
-            </Box>
-          ) : (
-            <Typography align="center" color="textSecondary">
-              无测试详情数据
-            </Typography>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
           )}
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => {
-              if (selectedTestDetails) {
-                const formatted = JSON.stringify(selectedTestDetails, null, 2)
-                navigator.clipboard.writeText(formatted)
-                toast.success('已复制全部数据到剪贴板')
-              }
-            }}
-            startIcon={<CopyIcon />}
-          >
-            复制全部
+          <Button onClick={() => setTestDetailsDialog(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 编辑脚本执行次数对话框 */}
+      <Dialog
+        open={executionCountDialog}
+        onClose={() => setExecutionCountDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          编辑脚本执行次数
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 2 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              账户邮箱：{editingAccount?.email}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
+              当前执行次数：{editingAccount?.scriptExecutionCount || 0}
+            </Typography>
+            <TextField
+              fullWidth
+              label="新的执行次数"
+              type="number"
+              value={tempExecutionCount}
+              onChange={(e) => setTempExecutionCount(e.target.value)}
+              inputProps={{ min: 0, max: 10 }}
+              helperText="执行次数范围：0-10，≤4执行gemini脚本，>4执行vertex脚本"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExecutionCountDialog(false)}>
+            取消
           </Button>
-          <Button onClick={() => setTestDetailsDialog(false)} variant="contained">
-            关闭
+          <Button
+            onClick={handleSaveExecutionCount}
+            variant="contained"
+            color="primary"
+          >
+            保存
           </Button>
         </DialogActions>
       </Dialog>

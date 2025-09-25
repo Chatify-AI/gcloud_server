@@ -1,6 +1,6 @@
 const express = require('express');
 const { GCloudAccount, CommandExecution, ExecutionHistory } = require('../models');
-const gcloudExecutor = require('../services/gcloudExecutor');
+const gcloudExecutor = require('../services/gcloudExecutorClient');
 const logger = require('../src/utils/logger');
 const { Op } = require('sequelize');
 

@@ -372,6 +372,123 @@ class ChannelStatsService {
   }
 
   /**
+   * 获取特定账号的消费数据（轻量版本）
+   */
+  async getAccountConsumption(email) {
+    try {
+      console.log(`🔍 Getting consumption data for account: ${email}`);
+
+      // 获取所有渠道数据
+      const allChannelsResult = await oneApiService.getAllChannels();
+      if (!allChannelsResult.success || !allChannelsResult.data?.items) {
+        return {
+          success: false,
+          message: 'Failed to get channels data'
+        };
+      }
+
+      const allChannels = allChannelsResult.data.items;
+
+      // 筛选出该邮箱账号的渠道
+      const accountChannels = allChannels.filter(channel => {
+        if (!channel.name) return false;
+
+        // 提取邮箱前缀和域名用于匹配
+        const emailPrefix = email.split('@')[0];
+        const channelName = channel.name.toLowerCase();
+        const emailLower = email.toLowerCase();
+
+        // 匹配规则：完全匹配邮箱 或 包含邮箱前缀
+        return channelName === emailLower ||
+               channelName.includes(emailPrefix.toLowerCase()) ||
+               channelName.includes(emailLower);
+      });
+
+      console.log(`🔍 Found ${accountChannels.length} channels for ${email}`);
+
+      if (accountChannels.length === 0) {
+        return {
+          success: false,
+          message: `No channels found for account: ${email}`,
+          consumption: {
+            email: email,
+            totalChannels: 0,
+            totalUsedQuota: 0,
+            totalAmount: 0,
+            enabledChannels: 0,
+            disabledChannels: 0,
+            suspendedChannels: 0,
+            channels: []
+          }
+        };
+      }
+
+      // 统计该账号的数据
+      let totalUsedQuota = 0;
+      let totalAmount = 0;
+      let enabledChannels = 0;
+      let disabledChannels = 0;
+      let suspendedChannels = 0;
+
+      const channelDetails = accountChannels.map(channel => {
+        const usedQuota = channel.used_quota || 0;
+        const amount = usedQuota / 500000; // 转换为美元
+
+        totalUsedQuota += usedQuota;
+        totalAmount += amount;
+
+        // 统计状态
+        if (channel.name && channel.name.includes('_suspend')) {
+          suspendedChannels++;
+        } else if (channel.status === 1) {
+          enabledChannels++;
+        } else {
+          disabledChannels++;
+        }
+
+        return {
+          id: channel.id,
+          name: channel.name,
+          status: channel.status,
+          type: channel.type,
+          usedQuota: usedQuota,
+          amount: amount,
+          createdTime: channel.created_time * 1000,
+          createdTimeFormatted: new Date(channel.created_time * 1000).toISOString(),
+          model: channel.model_mapping || [],
+          isSuspended: channel.name && channel.name.includes('_suspend')
+        };
+      });
+
+      const consumption = {
+        email: email,
+        totalChannels: accountChannels.length,
+        totalUsedQuota: totalUsedQuota,
+        totalAmount: totalAmount,
+        enabledChannels: enabledChannels,
+        disabledChannels: disabledChannels,
+        suspendedChannels: suspendedChannels,
+        channels: channelDetails.sort((a, b) => b.createdTime - a.createdTime), // 按创建时间倒序
+        generatedAt: new Date().toISOString()
+      };
+
+      console.log(`🔍 Account ${email} consumption: $${totalAmount.toFixed(4)} (${accountChannels.length} channels)`);
+
+      return {
+        success: true,
+        consumption: consumption
+      };
+
+    } catch (error) {
+      console.error(`Error getting consumption for ${email}:`, error);
+      return {
+        success: false,
+        message: error.message
+      };
+    }
+  }
+
+  /**
    * 获取服务状态
    */
   getStatus() {

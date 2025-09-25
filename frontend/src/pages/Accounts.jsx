@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   Container,
   Paper,
@@ -18,14 +18,24 @@ import {
   TextField,
   Chip,
   Box,
-  CircularProgress
+  CircularProgress,
+  Pagination,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  InputAdornment,
+  Tooltip
 } from '@mui/material'
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
   Refresh as RefreshIcon,
   Edit as EditIcon,
-  ContentCopy as CopyIcon
+  ContentCopy as CopyIcon,
+  Search as SearchIcon,
+  AttachMoney as MoneyIcon,
+  Visibility as ViewIcon
 } from '@mui/icons-material'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -41,20 +51,113 @@ function Accounts() {
   const [editAccount, setEditAccount] = useState(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
 
+  // 分页和搜索相关状态
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    totalPages: 0,
+    showAll: false
+  })
+  const [searchTerm, setSearchTerm] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+
+  // 消费数据相关状态
+  const [consumptionData, setConsumptionData] = useState({})
+  const [loadingConsumption, setLoadingConsumption] = useState({})
+
   useEffect(() => {
     fetchAccounts()
-  }, [])
+  }, [pagination.page, pagination.pageSize, pagination.showAll, searchTerm])
 
   const fetchAccounts = async () => {
     try {
-      const response = await axios.get('/api/accounts')
+      setLoading(true)
+      const params = {
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        showAll: pagination.showAll,
+        search: searchTerm
+      }
+
+      const response = await axios.get('/api/accounts', { params })
       setAccounts(response.data.accounts)
+      setPagination(prev => ({
+        ...prev,
+        ...response.data.pagination
+      }))
+
+      // 自动异步获取消费数据
+      if (response.data.accounts.length > 0) {
+        fetchConsumptionData(response.data.accounts)
+      }
     } catch (error) {
       console.error('Error fetching accounts:', error)
       toast.error('Failed to fetch accounts')
     } finally {
       setLoading(false)
     }
+  }
+
+  const fetchConsumptionData = async (accountList) => {
+    const accountIds = accountList.map(acc => acc.id)
+
+    // 设置加载状态
+    const loadingState = {}
+    accountIds.forEach(id => {
+      loadingState[id] = true
+    })
+    setLoadingConsumption(loadingState)
+
+    try {
+      const response = await axios.post('/api/accounts/batch-consumption', {
+        accountIds
+      })
+
+      if (response.data.success) {
+        const consumptionMap = {}
+        response.data.results.forEach(result => {
+          consumptionMap[result.accountId] = {
+            success: result.success,
+            data: result.consumption,
+            error: result.error,
+            message: result.message
+          }
+        })
+        setConsumptionData(prev => ({ ...prev, ...consumptionMap }))
+      }
+    } catch (error) {
+      console.error('Error fetching consumption data:', error)
+    } finally {
+      // 清除加载状态
+      setLoadingConsumption({})
+    }
+  }
+
+  const handleSearch = () => {
+    setSearchTerm(searchInput)
+    setPagination(prev => ({ ...prev, page: 1 }))
+  }
+
+  const handleKeyPress = (event) => {
+    if (event.key === 'Enter') {
+      handleSearch()
+    }
+  }
+
+  const handlePageChange = (event, newPage) => {
+    setPagination(prev => ({ ...prev, page: newPage }))
+  }
+
+  const handlePageSizeChange = (event) => {
+    const newPageSize = event.target.value
+    const showAll = newPageSize === 'all'
+    setPagination(prev => ({
+      ...prev,
+      pageSize: showAll ? 50 : newPageSize,
+      showAll,
+      page: 1
+    }))
   }
 
   const handleAddAccount = async () => {
@@ -151,7 +254,60 @@ function Accounts() {
     toast.success('URL copied to clipboard!')
   }
 
-  if (loading) {
+  const renderConsumptionCell = (account) => {
+    const consumption = consumptionData[account.id]
+    const isLoading = loadingConsumption[account.id]
+
+    if (isLoading) {
+      return (
+        <Box display="flex" alignItems="center" gap={1}>
+          <CircularProgress size={16} />
+          <Typography variant="caption">Loading...</Typography>
+        </Box>
+      )
+    }
+
+    if (!consumption) {
+      return (
+        <Typography variant="caption" color="text.secondary">
+          No data
+        </Typography>
+      )
+    }
+
+    if (!consumption.success) {
+      return (
+        <Tooltip title={consumption.error || consumption.message || 'Failed to load'}>
+          <Typography variant="caption" color="error">
+            Error
+          </Typography>
+        </Tooltip>
+      )
+    }
+
+    if (consumption.data) {
+      const amount = consumption.data.totalAmount || 0
+      return (
+        <Box display="flex" alignItems="center" gap={0.5}>
+          <MoneyIcon fontSize="small" color="primary" />
+          <Typography variant="body2" fontWeight="medium" color="primary">
+            ${amount.toFixed(4)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            ({consumption.data.totalChannels} channels)
+          </Typography>
+        </Box>
+      )
+    }
+
+    return (
+      <Typography variant="caption" color="text.secondary">
+        No consumption
+      </Typography>
+    )
+  }
+
+  if (loading && accounts.length === 0) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
         <CircularProgress />
@@ -174,6 +330,50 @@ function Accounts() {
         </Button>
       </Box>
 
+      {/* 搜索和控制区域 */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+          <TextField
+            placeholder="Search by email, project ID or name..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            size="small"
+            sx={{ minWidth: 300, flexGrow: 1 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon />
+                </InputAdornment>
+              )
+            }}
+          />
+          <Button
+            variant="contained"
+            onClick={handleSearch}
+            startIcon={<SearchIcon />}
+          >
+            Search
+          </Button>
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>Page Size</InputLabel>
+            <Select
+              value={pagination.showAll ? 'all' : pagination.pageSize}
+              onChange={handlePageSizeChange}
+              label="Page Size"
+            >
+              <MenuItem value={50}>50</MenuItem>
+              <MenuItem value={100}>100</MenuItem>
+              <MenuItem value="all">All</MenuItem>
+            </Select>
+          </FormControl>
+          {loading && (
+            <CircularProgress size={20} />
+          )}
+        </Box>
+      </Paper>
+
       <TableContainer component={Paper}>
         <Table>
           <TableHead>
@@ -181,6 +381,7 @@ function Accounts() {
               <TableCell>Email</TableCell>
               <TableCell>Project</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>Consumption</TableCell>
               <TableCell>Last Used</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -188,16 +389,25 @@ function Accounts() {
           <TableBody>
             {accounts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} align="center">
-                  No accounts found. Click "Add Account" to connect your first Google Cloud account.
+                <TableCell colSpan={6} align="center">
+                  {searchTerm ?
+                    `No accounts found matching "${searchTerm}". Try different search terms.` :
+                    'No accounts found. Click "Add Account" to connect your first Google Cloud account.'
+                  }
                 </TableCell>
               </TableRow>
             ) : (
               accounts.map((account) => (
                 <TableRow key={account.id}>
-                  <TableCell>{account.email}</TableCell>
                   <TableCell>
-                    {account.projectName || account.projectId || 'Not set'}
+                    <Typography variant="body2" fontWeight="medium">
+                      {account.email}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2">
+                      {account.projectName || account.projectId || 'Not set'}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     <Chip
@@ -207,15 +417,21 @@ function Accounts() {
                     />
                   </TableCell>
                   <TableCell>
-                    {account.lastUsed
-                      ? new Date(account.lastUsed).toLocaleString()
-                      : 'Never'}
+                    {renderConsumptionCell(account)}
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2">
+                      {account.lastUsed
+                        ? new Date(account.lastUsed).toLocaleString()
+                        : 'Never'}
+                    </Typography>
                   </TableCell>
                   <TableCell align="right">
                     <IconButton
                       color="primary"
                       onClick={() => handleEditAccount(account)}
                       title="Edit"
+                      size="small"
                     >
                       <EditIcon />
                     </IconButton>
@@ -223,6 +439,7 @@ function Accounts() {
                       color="primary"
                       onClick={() => handleRefreshToken(account.id)}
                       title="Refresh Token"
+                      size="small"
                     >
                       <RefreshIcon />
                     </IconButton>
@@ -230,6 +447,7 @@ function Accounts() {
                       color="error"
                       onClick={() => handleDeleteAccount(account.id)}
                       title="Delete"
+                      size="small"
                     >
                       <DeleteIcon />
                     </IconButton>
@@ -241,6 +459,24 @@ function Accounts() {
         </Table>
       </TableContainer>
 
+      {/* 分页控件 */}
+      {!pagination.showAll && pagination.totalPages > 1 && (
+        <Box display="flex" justifyContent="center" alignItems="center" mt={2} gap={2}>
+          <Pagination
+            count={pagination.totalPages}
+            page={pagination.page}
+            onChange={handlePageChange}
+            color="primary"
+            size="large"
+          />
+          <Typography variant="body2" color="text.secondary">
+            Page {pagination.page} of {pagination.totalPages}
+            ({pagination.total} total accounts)
+          </Typography>
+        </Box>
+      )}
+
+      {/* 添加账号对话框 */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add Google Cloud Account</DialogTitle>
         <DialogContent>
@@ -282,6 +518,7 @@ function Accounts() {
         </DialogActions>
       </Dialog>
 
+      {/* 编辑账号对话框 */}
       <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Edit Account</DialogTitle>
         <DialogContent>

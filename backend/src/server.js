@@ -10,7 +10,7 @@ const path = require('path');
 
 const { connectDB } = require('../config/database');
 const logger = require('./utils/logger');
-const gcloudExecutor = require('../services/gcloudExecutor');
+const gcloudExecutor = require('../services/gcloudExecutorClient');
 const channelFileMonitor = require('../services/channelFileMonitor');
 const gcloudMonitorService = require('../services/gcloudMonitorService');
 

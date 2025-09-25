@@ -13,7 +13,7 @@ class GCloudMonitorService {
     this.isRunning = false;
     this.accountInterval = 60000; // 每个账号1分钟监控一次
     this.scriptCooldownInterval = 20 * 60 * 1000; // 脚本执行后20分钟冷却时间
-    this.checkNewAccountsInterval = 5 * 60 * 1000; // 5分钟检查一次新账号
+    this.checkNewAccountsInterval = 30 * 1000; // 30秒检查一次新账号，快速响应新增账号
 
     // 新的架构：每个账号独立定时器
     this.accountTimers = new Map(); // accountId -> timer
@@ -105,12 +105,15 @@ class GCloudMonitorService {
 
     logger.info(`Starting monitor thread for account: ${account.email} (ID: ${account.id})`);
 
-    // 立即执行一次监控
+    // 分散启动时间：每个账号延迟 accountId * 2秒，最大30秒
+    const startDelay = Math.min((account.id % 30) * 2000, 30000);
+
+    // 延迟执行第一次监控
     setTimeout(() => {
       this.monitorSingleAccount(account).catch(err => {
         logger.error(`Initial monitor error for account ${account.email}:`, err);
       });
-    }, 100); // 稍微延迟避免同时启动
+    }, startDelay);
 
     // 设置定时器，每1分钟执行一次
     const timer = setInterval(async () => {
@@ -310,18 +313,31 @@ class GCloudMonitorService {
         // 没有渠道且不在锁定期，执行脚本
         logger.info(`No available channels for ${account.email}, executing recovery script`);
 
-        await this.executeRecoveryScript(account, log);
+        const executionResult = await this.executeRecoveryScript(account, log);
 
         await account.update({
           lastMonitorTime: new Date()
         });
 
-        await log.update({
-          monitorStatus: 'script_executed',
-          message: 'No channels found, recovery script executed',
-          scriptExecuted: true,
-          endTime: new Date()
-        });
+        // 如果脚本执行成功，更新日志状态
+        if (executionResult?.success) {
+          await log.update({
+            monitorStatus: 'script_executed',
+            message: `No channels found, recovery script executed (executionId: ${executionResult?.executionId || 'N/A'})`,
+            scriptExecuted: true,
+            endTime: new Date()
+          });
+        } else {
+          // 如果脚本执行失败或在冷却期
+          await log.update({
+            monitorStatus: executionResult?.reason === 'cooldown' ? 'skipped' : 'failed',
+            message: executionResult?.reason === 'cooldown' ?
+              'No channels found but in script cooldown period' :
+              `No channels found, recovery script failed: ${executionResult?.error || 'Unknown error'}`,
+            scriptExecuted: false,
+            endTime: new Date()
+          });
+        }
 
         return;
       }
@@ -401,9 +417,11 @@ class GCloudMonitorService {
       if (result.success && result.data) {
         const channels = result.data.items || result.data.data || [];
 
-        // 过滤出该邮箱的渠道
+        // 过滤出该邮箱的渠道（排除包含_suspend的渠道）
         const filteredChannels = channels.filter(channel => {
           if (!channel.name) return false;
+          // 排除名称包含 _suspend 的渠道
+          if (channel.name.includes('_suspend')) return false;
           return channel.name === email || channel.name.includes(email.split('@')[0]);
         });
 
@@ -495,7 +513,7 @@ class GCloudMonitorService {
    */
   async testSingleChannelWithRetries(channel, accountEmail) {
     const maxRetries = 3; // 恢复3次重试
-    const retryInterval = 10000; // 10秒
+    const retryInterval = 3000; // 3秒，减少等待时间避免并发测试超过1分钟
     const startTime = Date.now();
 
     logger.info(`Testing channel ${channel.id} (${channel.name}) with 3 retries for ${accountEmail}`);
@@ -504,10 +522,13 @@ class GCloudMonitorService {
       try {
         logger.info(`Channel ${channel.id} attempt ${attempt}/${maxRetries}`);
 
-        // 1. 检查消费记录
-        const hasConsumption = await oneApiService.hasRecentConsumption(channel.id, 1);
+        // 1. 检查消费记录（限定为 gemini-2.5-pro 模型，添加超时保护）
+        const hasConsumption = await Promise.race([
+          oneApiService.hasRecentConsumption(channel.id, 1, 'gemini-2.5-pro'),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Consumption check timeout')), 10000))
+        ]);
         if (hasConsumption) {
-          logger.info(`Channel ${channel.id} has recent consumption, marking as successful`);
+          logger.info(`Channel ${channel.id} has recent consumption for gemini-2.5-pro, marking as successful`);
           return {
             success: true,
             reason: 'consumption',
@@ -573,7 +594,7 @@ class GCloudMonitorService {
     const axios = require('axios');
 
     try {
-      const response = await axios.get('https://gcloud.luzhipeng.com/api/public/executions', {
+      const response = await axios.get('http://localhost:3000/api/public/executions', {
         params: {
           accountId: accountEmail,
           limit: limit
@@ -627,17 +648,37 @@ class GCloudMonitorService {
       }
 
       // 根据执行次数决定脚本类型
-      const scriptType = account.scriptExecutionCount < 3 ? 'gemini' : 'vertex';
+      const scriptType = account.scriptExecutionCount < 4 ? 'gemini' : 'vertex';
       const newScriptCount = account.scriptExecutionCount + 1;
 
       logger.info(`Executing recovery script for ${account.email}, type: ${scriptType}, count: ${newScriptCount}`);
 
-      const shellCommand = `curl -fsSL http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
+      // 在执行脚本之前，先挂起该账户的所有渠道
+      try {
+        logger.info(`Suspending all channels for ${account.email} before script execution`);
+        const suspensionResult = await oneApiService.suspendAccountChannels(account.email);
+        logger.info(`Channel suspension completed for ${account.email}: ${suspensionResult.suspended.length} suspended, ${suspensionResult.failed.length} failed`);
 
-      const response = await axios.post('https://gcloud.luzhipeng.com/api/public/cloud-shell', {
-        accountId: account.email,
+        if (suspensionResult.suspended.length > 0) {
+          logger.info(`Successfully suspended channels: ${suspensionResult.suspended.map(ch => `${ch.name} -> ${ch.newName}`).join(', ')}`);
+        }
+
+        if (suspensionResult.failed.length > 0) {
+          logger.warn(`Failed to suspend channels: ${suspensionResult.failed.map(ch => `${ch.name} (${ch.error})`).join(', ')}`);
+        }
+      } catch (error) {
+        logger.error(`Failed to suspend channels for ${account.email} before script execution:`, error.message);
+        // 不阻止脚本执行，只记录错误
+      }
+
+      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh) && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
+
+      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+        adminUsername: 'monitor-service',
+        accountId: account.id,
         command: shellCommand,
-        async: true
+        async: true,
+        syncAuth: true
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -679,10 +720,55 @@ class GCloudMonitorService {
         return true;
       }
 
+      // 检查是否包含项目配额已满错误
+      if (fullOutput.includes('项目配额已满，将仅处理现有项目')) {
+        logger.warn(`Detected project quota full error for ${account.email}, triggering final vertex script`);
+
+        // 更新当前脚本执行计数
+        await account.update({
+          scriptExecutionCount: newScriptCount,
+          lastMonitorTime: new Date()
+        });
+
+        // 如果当前执行的是gemini，需要立即执行vertex作为最后一次
+        if (scriptType === 'gemini') {
+          logger.info(`Project quota full detected for ${account.email}, executing final vertex script`);
+
+          // 执行最后一次vertex脚本
+          const finalResult = await this.executeFinalVertexScript(account, log, fullOutput);
+          return finalResult;
+        } else {
+          // 如果已经是vertex脚本，直接停止监控
+          logger.info(`Project quota full detected for ${account.email} during vertex execution, disabling monitoring`);
+
+          await account.update({
+            needMonitor: false
+          });
+
+          await log.update({
+            scriptExecuted: true,
+            scriptExecutionCount: newScriptCount,
+            scriptOutput: fullOutput,
+            scriptType: scriptType,
+            monitorStatus: 'disabled',
+            message: 'Project quota full error detected during vertex script, monitoring disabled'
+          });
+
+          this.stopAccountThread(account.id);
+          return { success: true, executionId: executionId };
+        }
+      }
+
       if (result.error && !result.output) {
         logger.error(`Script execution failed for ${account.email}: ${result.error}`);
         throw new Error(result.error);
       }
+
+      // 无论如何，都要先更新脚本执行次数
+      await account.update({
+        scriptExecutionCount: newScriptCount,
+        lastMonitorTime: new Date()
+      });
 
       // 正常完成
       await log.update({
@@ -693,7 +779,7 @@ class GCloudMonitorService {
         message: `Script executed successfully, executionId: ${executionId || 'N/A'}`
       });
 
-      logger.info(`Script executed successfully for ${account.email}`);
+      logger.info(`Script executed successfully for ${account.email}, new count: ${newScriptCount}`);
 
       // 检查是否需要禁用监听（执行vertex后）
       const shouldDisableMonitoring = scriptType === 'vertex';
@@ -701,8 +787,6 @@ class GCloudMonitorService {
       if (shouldDisableMonitoring) {
         logger.info(`Disabling monitoring for ${account.email} after vertex script execution`);
         await account.update({
-          scriptExecutionCount: newScriptCount,
-          lastMonitorTime: new Date(),
           needMonitor: false
         });
 
@@ -714,11 +798,6 @@ class GCloudMonitorService {
         // 停止该账号的监控线程
         this.stopAccountThread(account.id);
       } else {
-        await account.update({
-          scriptExecutionCount: newScriptCount,
-          lastMonitorTime: new Date()
-        });
-
         await log.update({
           scriptType: scriptType,
           message: `Recovery script (${scriptType}) executed`
@@ -730,17 +809,100 @@ class GCloudMonitorService {
     } catch (error) {
       logger.error(`Error executing recovery script for ${account.email}:`, error);
 
-      await log.update({
-        scriptError: error.message,
-        scriptExecuted: false,
-        monitorStatus: 'failed'
-      });
-
+      // 即使出错也要增加执行次数，因为脚本调用已经尝试过了
+      const newScriptCount = account.scriptExecutionCount + 1;
       await account.update({
+        scriptExecutionCount: newScriptCount,
         lastMonitorTime: new Date()
       });
 
+      await log.update({
+        scriptError: error.message,
+        scriptExecuted: false,
+        scriptExecutionCount: newScriptCount,
+        monitorStatus: 'failed'
+      });
+
+      logger.info(`Script execution failed for ${account.email}, but count updated to: ${newScriptCount}`);
+
       return { success: false, reason: 'error', error: error.message };
+    }
+  }
+
+  /**
+   * 执行最后一次vertex脚本（项目配额已满时触发）
+   */
+  async executeFinalVertexScript(account, log, previousOutput) {
+    const axios = require('axios');
+
+    try {
+      logger.info(`Executing final vertex script for ${account.email} due to project quota full`);
+
+      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh) && chmod +x /tmp/gcp-put-final-${account.id}.sh && /tmp/gcp-put-final-${account.id}.sh vertex`;
+
+      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+        adminUsername: 'monitor-service',
+        accountId: account.id,
+        command: shellCommand,
+        async: true,
+        syncAuth: true
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 5 * 60 * 1000
+      });
+
+      const result = response.data;
+      const fullOutput = (result.output || '') + (result.error || '');
+      const executionId = result.executionId || result.id;
+
+      // 增加脚本执行计数
+      const finalScriptCount = account.scriptExecutionCount + 1;
+
+      logger.info(`Final vertex script execution result for ${account.email}, executionId: ${executionId || 'N/A'}`);
+
+      // 更新账户并停止监控
+      await account.update({
+        scriptExecutionCount: finalScriptCount,
+        lastMonitorTime: new Date(),
+        needMonitor: false
+      });
+
+      await log.update({
+        scriptExecuted: true,
+        scriptExecutionCount: finalScriptCount,
+        scriptOutput: `Previous gemini output:\n${previousOutput}\n\nFinal vertex output:\n${fullOutput}`,
+        scriptType: 'vertex',
+        monitorStatus: 'disabled',
+        message: `Project quota full detected, executed final vertex script and disabled monitoring (executionId: ${executionId || 'N/A'})`
+      });
+
+      // 停止该账号的监控线程
+      this.stopAccountThread(account.id);
+
+      logger.info(`Final vertex script completed for ${account.email}, monitoring disabled`);
+
+      return { success: true, executionId: executionId, final: true };
+
+    } catch (error) {
+      logger.error(`Error executing final vertex script for ${account.email}:`, error);
+
+      await account.update({
+        needMonitor: false,
+        lastMonitorTime: new Date()
+      });
+
+      await log.update({
+        scriptError: error.message,
+        scriptExecuted: false,
+        monitorStatus: 'failed',
+        message: 'Failed to execute final vertex script due to project quota full'
+      });
+
+      this.stopAccountThread(account.id);
+
+      return { success: false, reason: 'error', error: error.message, final: true };
     }
   }
 
@@ -779,14 +941,16 @@ class GCloudMonitorService {
       logger.info(`Initializing new account: ${account.email}`);
 
       const scriptType = 'gemini';
-      const shellCommand = `curl -fsSL http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
+      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh) && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
 
-      logger.info(`Executing initial script for ${account.email} via public API`);
+      logger.info(`Executing initial script for ${account.email} via executor service`);
 
-      const response = await axios.post('https://gcloud.luzhipeng.com/api/public/cloud-shell', {
-        accountId: account.email,
+      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+        adminUsername: 'monitor-service',
+        accountId: account.id,
         command: shellCommand,
-        async: true
+        async: true,
+        syncAuth: true
       }, {
         headers: {
           'Content-Type': 'application/json'
