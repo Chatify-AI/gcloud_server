@@ -697,7 +697,7 @@ function GCloudAccounts() {
               </Button>
               <Button
                 size="small"
-                startIcon={<Cloud />}
+                startIcon={<CloudIcon />}
                 onClick={() => window.open(authUrl, '_blank')}
                 sx={{ ml: 1 }}
               >
