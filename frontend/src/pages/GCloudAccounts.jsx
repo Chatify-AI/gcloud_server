@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Container,
   Paper,
@@ -28,7 +28,10 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  InputAdornment
+  InputAdornment,
+  Card,
+  CardContent,
+  Grid
 } from '@mui/material'
 import {
   Add as AddIcon,
@@ -44,7 +47,9 @@ import {
   Info as InfoIcon,
   BugReport as BugReportIcon,
   Search as SearchIcon,
-  AttachMoney as MoneyIcon
+  AttachMoney as MoneyIcon,
+  Analytics as AnalyticsIcon,
+  TrendingUp as TrendingUpIcon
 } from '@mui/icons-material'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -84,6 +89,34 @@ function GCloudAccounts() {
   // 消费数据相关状态
   const [consumptionData, setConsumptionData] = useState({})
   const [loadingConsumption, setLoadingConsumption] = useState({})
+
+  // 统计数据计算
+  const statistics = useMemo(() => {
+    const totalAccounts = accounts.length
+    let totalAmount = 0
+    let accountsWithData = 0
+
+    accounts.forEach(account => {
+      const consumption = consumptionData[account.id]
+      if (consumption?.success && consumption.data?.totalAmount) {
+        totalAmount += consumption.data.totalAmount
+        accountsWithData++
+      }
+    })
+
+    const accountsWithoutData = totalAccounts - accountsWithData
+    const averageAmount = totalAccounts > 0 ? totalAmount / totalAccounts : 0
+    const averageAmountWithData = accountsWithData > 0 ? totalAmount / accountsWithData : 0
+
+    return {
+      totalAccounts,
+      totalAmount,
+      averageAmount,
+      averageAmountWithData,
+      accountsWithData,
+      accountsWithoutData
+    }
+  }, [accounts, consumptionData])
 
   useEffect(() => {
     fetchAccounts()
@@ -415,6 +448,85 @@ function GCloudAccounts() {
           {generatingUrl ? <CircularProgress size={20} /> : '添加账户'}
         </Button>
       </Box>
+
+      {/* 统计卡片 */}
+      <Grid container spacing={3} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1}>
+                <AnalyticsIcon color="primary" />
+                <Typography variant="h6" color="primary">
+                  总账户数
+                </Typography>
+              </Box>
+              <Typography variant="h4" fontWeight="bold" sx={{ mt: 1 }}>
+                {statistics.totalAccounts}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {statistics.accountsWithData} 有数据, {statistics.accountsWithoutData} 无数据
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1}>
+                <MoneyIcon color="success" />
+                <Typography variant="h6" color="success.main">
+                  累计总金额
+                </Typography>
+              </Box>
+              <Typography variant="h4" fontWeight="bold" sx={{ mt: 1, color: 'success.main' }}>
+                ${statistics.totalAmount.toFixed(4)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                所有账户消费总和
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1}>
+                <TrendingUpIcon color="warning" />
+                <Typography variant="h6" color="warning.main">
+                  平均金额
+                </Typography>
+              </Box>
+              <Typography variant="h4" fontWeight="bold" sx={{ mt: 1, color: 'warning.main' }}>
+                ${statistics.averageAmount.toFixed(4)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                按所有账户计算
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        <Grid item xs={12} sm={6} md={3}>
+          <Card>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={1}>
+                <TrendingUpIcon color="info" />
+                <Typography variant="h6" color="info.main">
+                  有效平均值
+                </Typography>
+              </Box>
+              <Typography variant="h4" fontWeight="bold" sx={{ mt: 1, color: 'info.main' }}>
+                ${statistics.averageAmountWithData.toFixed(4)}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                仅计算有消费数据的账户
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
 
       {/* 搜索和控制区域 */}
       <Paper sx={{ p: 2, mb: 2 }}>
