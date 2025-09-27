@@ -60,16 +60,13 @@ LAST_UPLOAD_JSON_COUNT=0
 LAST_UPLOAD_GEMINI_KEYS=0
 LAST_ARCHIVE_DIR=""
 
-# FTP服务器配置 - 改为使用本地目录
-# 原FTP服务器: 82.197.94.152
-# 现改为本地目录存储
-FTP_LOCAL_MODE="true"  # 使用本地目录模式
-FTP_LOCAL_DIR="/home/Chatify/vip"  # 本地FTP目录，与监听服务一致
-FTP_SERVER="${FTP_SERVER:-localhost}"
+# FTP服务器配置
+# 使用本地FTP服务器，替代原82.197.94.152
+FTP_SERVER="${FTP_SERVER:-172.93.101.237}"
 FTP_PORT="${FTP_PORT:-21}"
-FTP_USERNAME="${FTP_USERNAME:-local}"
-FTP_PASSWORD="${FTP_PASSWORD:-local}"
-FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-vip}"  # 保留配置兼容性
+FTP_USERNAME="${FTP_USERNAME:-Chatify}"
+FTP_PASSWORD="${FTP_PASSWORD:-sk-chatify-MoLu154!}"
+FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-vip}"  # 上传到用户主目录下的vip目录
 
 # 无人值守模式配置
 UNATTENDED_MODE=true
@@ -474,7 +471,7 @@ parse_json() {
     return 1
 }
 
-# FTP上传文件 - 支持本地模式
+# FTP上传文件
 upload_to_ftp() {
     local local_file="$1"
     local remote_filename="${2:-$(basename "$local_file")}"
@@ -482,23 +479,6 @@ upload_to_ftp() {
     if [ ! -f "$local_file" ]; then
         log "ERROR" "本地文件不存在: $local_file"
         return 1
-    fi
-
-    # 如果是本地模式，直接复制文件
-    if [ "$FTP_LOCAL_MODE" = "true" ]; then
-        log "INFO" "本地模式: 复制文件到 $FTP_LOCAL_DIR/$remote_filename"
-
-        # 确保目标目录存在
-        mkdir -p "$FTP_LOCAL_DIR" 2>/dev/null || true
-
-        # 复制文件
-        if cp "$local_file" "$FTP_LOCAL_DIR/$remote_filename"; then
-            log "SUCCESS" "文件复制成功: $remote_filename -> $FTP_LOCAL_DIR/"
-            return 0
-        else
-            log "ERROR" "文件复制失败: $remote_filename"
-            return 1
-        fi
     fi
 
     log "INFO" "上传文件到FTP服务器: $remote_filename"
