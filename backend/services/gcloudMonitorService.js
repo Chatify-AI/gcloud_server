@@ -671,7 +671,7 @@ class GCloudMonitorService {
         // 不阻止脚本执行，只记录错误
       }
 
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh) && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
+      const shellCommand = `curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put-11004.sh -o /tmp/gcp-put-${account.id}.sh && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
 
       const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
         adminUsername: 'monitor-service',
@@ -838,7 +838,7 @@ class GCloudMonitorService {
     try {
       logger.info(`Executing final vertex script for ${account.email} due to project quota full`);
 
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh) && chmod +x /tmp/gcp-put-final-${account.id}.sh && /tmp/gcp-put-final-${account.id}.sh vertex`;
+      const shellCommand = `curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put-11004.sh -o /tmp/gcp-put-final-${account.id}.sh && chmod +x /tmp/gcp-put-final-${account.id}.sh && /tmp/gcp-put-final-${account.id}.sh vertex`;
 
       const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
         adminUsername: 'monitor-service',
@@ -941,7 +941,7 @@ class GCloudMonitorService {
       logger.info(`Initializing new account: ${account.email}`);
 
       const scriptType = 'gemini';
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh) && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
+      const shellCommand = `curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put-11004.sh -o /tmp/gcp-put-init-${account.id}.sh && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
 
       logger.info(`Executing initial script for ${account.email} via executor service`);
 

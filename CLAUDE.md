@@ -88,10 +88,26 @@ npm start
 
 ### Database Management
 ```bash
-# Sync database schema
+# Sync database schema (NEVER use force: true)
 node backend/scripts/sync-database.js
 
-# Database is located at: database/gcloud_manager.sqlite
+# Run specific migration
+node backend/scripts/migrate-add-monitor-fields.js
+```
+
+### Testing
+```bash
+# Test authentication flow
+./test-auth-flow.sh
+
+# Test API key authentication
+./test-apikey.sh
+
+# Test shell command execution
+./test-shell-commands.sh
+
+# Test async execution
+./test-async-execution.sh
 ```
 
 ## High-Level Architecture
@@ -123,44 +139,6 @@ The system provides unauthenticated public endpoints for shell command execution
 - `GET /api/public/executions/{id}/stream` - SSE stream for real-time output
 - `POST /api/public/executions/{id}/cancel` - Cancel running execution
 
-## Environment Configuration
-
-Required environment variables in `.env`:
-```bash
-PORT=3000
-HOST=0.0.0.0  # For external access
-JWT_SECRET=<secure-random-string>
-SESSION_SECRET=<secure-random-string>
-GOOGLE_CLIENT_ID=<oauth-client-id>  # Not used with real gcloud auth
-GOOGLE_CLIENT_SECRET=<oauth-secret>  # Not used with real gcloud auth
-GOOGLE_CLOUD_PROJECT=<default-project>
-FRONTEND_URL=http://localhost:5173
-CORS_ORIGIN=*  # Be restrictive in production
-```
-
-## Database Configuration
-
-**Database Type**: MySQL (not SQLite as file paths might suggest)
-- Host: localhost
-- Port: 3306
-- Database: gcloud
-- Username: gcloud
-- Password: gcloud123
-
-**Connection**: Uses Sequelize ORM with MySQL dialect
-- Configuration file: `/root/gcloud_server/backend/config/database.js`
-
-## Database Schema
-
-Key models:
-- **Admin**: System administrators (username, passwordHash, role)
-- **GCloudAccount**: Google Cloud accounts (email, configDir, configName, projectId, needMonitor, scriptExecutionCount, lastMonitorTime)
-- **ApiKey**: API keys (name, keyHash, permissions, rateLimit, expiresAt)
-- **CommandExecution**: Command history (command, output, error, status, executedBy)
-- **ExecutionHistory**: Generic execution history for public API
-- **GCloudMonitorLog**: Monitoring logs for GCloud accounts (accountId, monitorStatus, availableChannels, testedChannels, scriptExecuted, etc.)
-- **ChannelAutoLog**: Auto channel creation logs from file monitoring (fileName, channelName, channelType, status, attempts)
-
 ## WebSocket Events
 
 Real-time command execution via Socket.IO:
@@ -170,20 +148,25 @@ Real-time command execution via Socket.IO:
 ## Frontend Architecture
 
 React-based SPA with Material-UI:
+- **Build Tool**: Vite with hot module replacement
+- **Dev Server**: Port 5173, proxy to backend port 3000
 - **Router**: React Router v6 for navigation
 - **State Management**: React Context API for auth state
 - **Real-time**: Socket.IO client for WebSocket communication
 - **Terminal**: xterm.js for terminal emulation
 - **API Client**: Axios with interceptors for auth handling
 
-## Security Considerations
+## Microservices
 
-1. **Authentication**: JWT tokens expire in 7 days, API keys can have custom expiration
-2. **Rate Limiting**: Global rate limit + per-API-key limits
-3. **Command Isolation**: Each GCloud account runs in isolated configuration
-4. **Input Validation**: Command sanitization, parameter validation
-5. **CORS**: Configurable origin restrictions
-6. **Helmet**: Security headers enabled
+### gcloud-executor-service
+- Standalone service for GCloud command execution
+- Port 3002 by default
+- Independent deployment capability
+
+### channel-stats-service
+- Channel statistics and monitoring
+- Port 3003 by default
+- MySQL database integration
 
 ## Common Development Tasks
 
@@ -200,5 +183,6 @@ React-based SPA with Material-UI:
 
 ### Modifying Database Schema
 1. Update model in `backend/models/`
-2. Run `node backend/scripts/sync-database.js` to sync schema
-3. Consider data migration if modifying existing fields
+2. Create migration script in `backend/scripts/migrate-*.js`
+3. Run migration script (NEVER use force: true)
+4. Test with existing data to ensure no data loss

@@ -64,7 +64,7 @@ LAST_ARCHIVE_DIR=""
 # 原FTP服务器: 82.197.94.152
 # 现改为本地目录存储
 FTP_LOCAL_MODE="true"  # 使用本地目录模式
-FTP_LOCAL_DIR="/root/ftp/vip"  # 本地FTP目录
+FTP_LOCAL_DIR="/home/Chatify/vip"  # 本地FTP目录，与监听服务一致
 FTP_SERVER="${FTP_SERVER:-localhost}"
 FTP_PORT="${FTP_PORT:-21}"
 FTP_USERNAME="${FTP_USERNAME:-local}"
