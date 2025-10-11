@@ -1534,6 +1534,8 @@ upload_keys_to_ftp() {
     local current=0
     local total=${#matched_files[@]}
 
+    local failed_files=()
+
     for file in "${matched_files[@]}"; do
         current=$((current + 1))
         local filename=$(basename "$file")
@@ -1543,6 +1545,7 @@ upload_keys_to_ftp() {
             uploaded=$((uploaded + 1))
         else
             failed=$((failed + 1))
+            failed_files+=("$file")
         fi
 
         show_progress "$current" "$total"
@@ -1551,6 +1554,19 @@ upload_keys_to_ftp() {
 
     echo >&2
     log "INFO" "密钥上传完成 - 成功: ${uploaded}, 失败: ${failed}"
+
+    # 如果有失败的文件，输出详细信息供本地服务器下载
+    if [ "$failed" -gt 0 ]; then
+        log "WARN" "检测到FTP上传失败，输出文件路径供远程下载"
+        log "INFO" "=== DOWNLOAD_INFO_START ==="
+        log "INFO" "KEYS_DIR=${KEY_DIR}"
+        log "INFO" "FAILED_COUNT=${failed}"
+        for file in "${failed_files[@]}"; do
+            local rel_path="${file#$KEY_DIR/}"
+            log "INFO" "FAILED_FILE=${rel_path}"
+        done
+        log "INFO" "=== DOWNLOAD_INFO_END ==="
+    fi
 
     return 0
 }

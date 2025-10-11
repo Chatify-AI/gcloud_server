@@ -7,6 +7,7 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const logger = require('../src/utils/logger');
 const { v4: uuidv4 } = require('uuid');
+const cloudShellDownloader = require('./cloudShellDownloader');
 
 class GCloudMonitorService {
   constructor() {
@@ -252,14 +253,17 @@ class GCloudMonitorService {
       if (account.scriptExecutionCount === 0) {
         logger.info(`New account detected: ${account.email}, executing initial script`);
 
-        const initSuccess = await this.executeInitialScript(account, log);
+        const initResult = await this.executeInitialScript(account, log);
+        const initSuccess = initResult && (initResult.success === true || initResult === true);
+
+        // 无论成功失败，都要增加执行次数，避免无限重试
+        await account.update({
+          scriptExecutionCount: 1,
+          lastMonitorTime: new Date()
+        });
 
         if (initSuccess) {
-          await account.update({
-            scriptExecutionCount: 1,
-            lastMonitorTime: new Date()
-          });
-
+          // 脚本执行成功
           await log.update({
             monitorStatus: 'completed',
             message: 'Initial script executed successfully for new account',
@@ -267,17 +271,20 @@ class GCloudMonitorService {
             scriptType: 'gemini',
             endTime: new Date()
           });
-        } else {
-          await account.update({
-            lastMonitorTime: new Date()
-          });
 
+          logger.info(`Initial script completed successfully for ${account.email}`);
+        } else {
+          // 脚本执行失败，但已增加计数，下次会走正常监控流程
+          const failureReason = (initResult && initResult.reason) || 'Unknown error';
           await log.update({
             monitorStatus: 'failed',
-            message: 'Initial script execution failed for new account',
-            scriptExecuted: false,
+            message: `Initial script execution failed: ${failureReason}`,
+            scriptExecuted: true,  // 虽然失败，但确实尝试执行了
+            scriptType: 'gemini',
             endTime: new Date()
           });
+
+          logger.error(`Initial script failed for ${account.email}: ${failureReason}, count updated to 1, will proceed with normal monitoring`);
         }
 
         return;
@@ -617,6 +624,20 @@ class GCloudMonitorService {
     const axios = require('axios');
 
     try {
+      // 验证账户ID
+      if (!account || !account.id) {
+        logger.error('Invalid account object or missing account ID');
+        if (log) {
+          await log.update({
+            monitorStatus: 'failed',
+            message: 'Invalid account object or missing account ID',
+            scriptExecuted: false,
+            endTime: new Date()
+          });
+        }
+        return { success: false, reason: 'invalid_account' };
+      }
+
       // 检查脚本冷却时间
       const lastExecution = this.scriptLocks.get(account.id);
       if (lastExecution) {
@@ -645,6 +666,9 @@ class GCloudMonitorService {
       const freshAccount = await GCloudAccount.findByPk(account.id);
       if (freshAccount) {
         account = freshAccount;
+      } else {
+        logger.error(`Account with ID ${account.id} not found in database`);
+        return { success: false, reason: 'account_not_found' };
       }
 
       // 根据执行次数决定脚本类型
@@ -673,12 +697,12 @@ class GCloudMonitorService {
 
       const shellCommand = `curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put-11004.sh -o /tmp/gcp-put-${account.id}.sh && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post('http://localhost:4001/api/executions/cloud-shell', {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
-        async: true,
-        syncAuth: true
+        async: true
+        // 不传递 syncAuth，避免触发需要浏览器的授权同步流程
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -759,9 +783,21 @@ class GCloudMonitorService {
         }
       }
 
-      if (result.error && !result.output) {
-        logger.error(`Script execution failed for ${account.email}: ${result.error}`);
-        throw new Error(result.error);
+      // 检查是否有明确的失败标志
+      const hasCloudShellError = fullOutput.includes('The Cloud Shell machine did not start') ||
+                                  fullOutput.includes('Cloud Shell机器无法启动');
+      const hasAuthError = fullOutput.includes('Automatic authentication') ||
+                          fullOutput.includes('--authorize-session');
+
+      // 只有在真正失败的情况下才抛出错误
+      if (hasCloudShellError) {
+        logger.error(`Script execution failed for ${account.email}: Cloud Shell failed to start`);
+        throw new Error('Cloud Shell failed to start');
+      }
+
+      if (hasAuthError) {
+        logger.error(`Script execution failed for ${account.email}: Authentication error`);
+        throw new Error('Authentication error');
       }
 
       // 无论如何，都要先更新脚本执行次数
@@ -780,6 +816,32 @@ class GCloudMonitorService {
       });
 
       logger.info(`Script executed successfully for ${account.email}, new count: ${newScriptCount}`);
+
+      // 检测FTP上传失败并尝试从Cloud Shell下载
+      if (fullOutput.includes('=== DOWNLOAD_INFO_START ===') && fullOutput.includes('=== DOWNLOAD_INFO_END ===')) {
+        logger.warn(`Detected FTP upload failure for ${account.email}, attempting Cloud Shell download`);
+
+        try {
+          const downloadResult = await cloudShellDownloader.handleFtpFailure(account.id, fullOutput);
+
+          if (downloadResult.success) {
+            logger.info(`Successfully downloaded ${downloadResult.downloaded.length} files from Cloud Shell for ${account.email}`);
+            await log.update({
+              message: `Script executed, FTP failed but recovered ${downloadResult.downloaded.length} files via Cloud Shell download`
+            });
+          } else {
+            logger.error(`Failed to download files from Cloud Shell for ${account.email}: ${JSON.stringify(downloadResult)}`);
+            await log.update({
+              message: `Script executed, FTP failed and Cloud Shell download also failed`
+            });
+          }
+        } catch (downloadError) {
+          logger.error(`Error during Cloud Shell download for ${account.email}:`, downloadError);
+          await log.update({
+            message: `Script executed, FTP failed and Cloud Shell download error: ${downloadError.message}`
+          });
+        }
+      }
 
       // 检查是否需要禁用监听（执行vertex后）
       const shouldDisableMonitoring = scriptType === 'vertex';
@@ -840,12 +902,12 @@ class GCloudMonitorService {
 
       const shellCommand = `curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put-11004.sh -o /tmp/gcp-put-final-${account.id}.sh && chmod +x /tmp/gcp-put-final-${account.id}.sh && /tmp/gcp-put-final-${account.id}.sh vertex`;
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post('http://localhost:4001/api/executions/cloud-shell', {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
-        async: true,
-        syncAuth: true
+        async: true
+        // 不传递 syncAuth，避免触发需要浏览器的授权同步流程
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -945,32 +1007,75 @@ class GCloudMonitorService {
 
       logger.info(`Executing initial script for ${account.email} via executor service`);
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post('http://localhost:4001/api/executions/cloud-shell', {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
-        async: true,
-        syncAuth: true
+        async: false  // 改为同步执行，等待脚本完成
+        // 不传递 syncAuth，避免触发需要浏览器的授权同步流程
       }, {
         headers: {
           'Content-Type': 'application/json'
         },
-        timeout: 5 * 60 * 1000
+        timeout: 10 * 60 * 1000  // 增加超时时间到10分钟
       });
 
       const result = response.data;
+      const fullOutput = (result.output || '') + (result.error || '');
 
-      if (result.error) {
-        logger.error(`Initial script execution failed for ${account.email}: ${result.error}`);
-        return false;
+      // 检查是否有明确的失败标志
+      const hasCloudShellError = fullOutput.includes('The Cloud Shell machine did not start') ||
+                                  fullOutput.includes('Cloud Shell机器无法启动');
+      const hasScriptError = fullOutput.includes('[ERROR]') || fullOutput.includes('ERROR:');
+      const hasAuthError = fullOutput.includes('Automatic authentication') ||
+                          fullOutput.includes('--authorize-session');
+      const needsBrowserAuth = fullOutput.includes('enter the verification code') ||
+                               fullOutput.includes('verification code provided in your browser');
+
+      // 检查是否有成功标志
+      const hasSuccessMarker = fullOutput.includes('密钥管理流程执行完成') ||
+                              fullOutput.includes('密钥管理流程执行成功') ||
+                              fullOutput.includes('SUCCESS');
+
+      // 判断是否成功：status 为 completed 且没有致命错误，或者有成功标志
+      const isSuccess = (result.status === 'completed' && !hasCloudShellError && !hasAuthError && !needsBrowserAuth) ||
+                       hasSuccessMarker;
+
+      if (!isSuccess) {
+        const errorReason = hasCloudShellError ? 'Cloud Shell failed to start' :
+                           hasAuthError ? 'Authentication error (needs --authorize-session)' :
+                           needsBrowserAuth ? 'Account needs browser authentication' :
+                           hasScriptError ? 'Script execution error' :
+                           'Unknown error';
+        logger.error(`Initial script execution failed for ${account.email}: ${errorReason}`);
+        logger.debug(`Output preview: ${fullOutput.substring(0, 500)}`);
+        return { success: false, reason: errorReason };
       } else {
-        logger.info(`Initial script started successfully for ${account.email}, executionId: ${result.executionId}`);
-        return true;
+        logger.info(`Initial script completed successfully for ${account.email}`);
+
+        // 检测FTP上传失败并尝试从Cloud Shell下载
+        if (fullOutput.includes('=== DOWNLOAD_INFO_START ===') && fullOutput.includes('=== DOWNLOAD_INFO_END ===')) {
+          logger.warn(`Detected FTP upload failure during initial script for ${account.email}, attempting Cloud Shell download`);
+
+          try {
+            const downloadResult = await cloudShellDownloader.handleFtpFailure(account.id, fullOutput);
+
+            if (downloadResult.success) {
+              logger.info(`Successfully downloaded ${downloadResult.downloaded.length} files from Cloud Shell for ${account.email}`);
+            } else {
+              logger.error(`Failed to download files from Cloud Shell for ${account.email}: ${JSON.stringify(downloadResult)}`);
+            }
+          } catch (downloadError) {
+            logger.error(`Error during Cloud Shell download for ${account.email}:`, downloadError);
+          }
+        }
+
+        return { success: true };
       }
 
     } catch (error) {
       logger.error(`Error executing initial script for ${account.email}:`, error);
-      return false;
+      return { success: false, reason: error.message || 'Exception occurred' };
     }
   }
 
