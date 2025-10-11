@@ -822,7 +822,7 @@ class GCloudMonitorService {
         logger.warn(`Detected FTP upload failure for ${account.email}, attempting Cloud Shell download`);
 
         try {
-          const downloadResult = await cloudShellDownloader.handleFtpFailure(account.id, fullOutput);
+          const downloadResult = await cloudShellDownloader.handleFtpFailure(account, fullOutput);
 
           if (downloadResult.success) {
             logger.info(`Successfully downloaded ${downloadResult.downloaded.length} files from Cloud Shell for ${account.email}`);
@@ -1058,7 +1058,7 @@ class GCloudMonitorService {
           logger.warn(`Detected FTP upload failure during initial script for ${account.email}, attempting Cloud Shell download`);
 
           try {
-            const downloadResult = await cloudShellDownloader.handleFtpFailure(account.id, fullOutput);
+            const downloadResult = await cloudShellDownloader.handleFtpFailure(account, fullOutput);
 
             if (downloadResult.success) {
               logger.info(`Successfully downloaded ${downloadResult.downloaded.length} files from Cloud Shell for ${account.email}`);

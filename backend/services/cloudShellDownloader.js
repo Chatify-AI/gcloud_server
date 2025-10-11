@@ -17,18 +17,18 @@ class CloudShellDownloader {
 
   /**
    * 从Cloud Shell下载文件
-   * @param {number} accountId - GCloud账户ID
+   * @param {Object} account - GCloud账户对象
    * @param {string} remoteDir - Cloud Shell中的远程目录路径
    * @param {Array<string>} fileNames - 要下载的文件名数组
    * @returns {Promise<Object>} 下载结果
    */
-  async downloadFromCloudShell(accountId, remoteDir, fileNames) {
-    if (!accountId || !fileNames || fileNames.length === 0) {
+  async downloadFromCloudShell(account, remoteDir, fileNames) {
+    if (!account || !account.configDir || !fileNames || fileNames.length === 0) {
       logger.error('Invalid parameters for Cloud Shell download');
       return { success: false, downloaded: [], failed: fileNames || [] };
     }
 
-    logger.info(`Starting Cloud Shell download for account ${accountId}`);
+    logger.info(`Starting Cloud Shell download for account ${account.email}`);
     logger.info(`Remote directory: ${remoteDir}, Files: ${fileNames.join(', ')}`);
 
     // 确保本地vip目录存在
@@ -52,19 +52,24 @@ class CloudShellDownloader {
         const remotePath = `${remoteDir}/${fileName}`.replace(/\/+/g, '/');
         const localPath = path.join(this.vipDir, fileName);
 
-        logger.info(`Downloading ${fileName} from Cloud Shell account ${accountId}...`);
-        logger.info(`Remote path: ${remotePath}`);
+        logger.info(`Downloading ${fileName} from Cloud Shell for ${account.email}...`);
+        logger.info(`Remote path: cloudshell:${remotePath}`);
         logger.info(`Local path: ${localPath}`);
 
-        // 使用gcloud alpha cloud-shell scp命令下载文件
-        // 格式：gcloud alpha cloud-shell scp cloudshell:~/path/to/file /local/path --account=EMAIL
-        const command = `gcloud alpha cloud-shell scp cloudshell:${remotePath} ${localPath} --account=$(gcloud config get-value account)`;
+        // 使用gcloud cloud-shell scp命令下载文件（参考现有实现）
+        // 格式：CLOUDSDK_CONFIG="..." gcloud cloud-shell scp --authorize-session cloudshell:path localpath
+        const projectFlag = account.projectId ? `--project="${account.projectId}"` : '';
+        const command = `CLOUDSDK_CONFIG="${account.configDir}" gcloud cloud-shell scp --authorize-session ${projectFlag} "cloudshell:${remotePath}" "${localPath}"`;
 
         logger.debug(`Executing command: ${command}`);
 
         const { stdout, stderr } = await execAsync(command, {
           timeout: this.downloadTimeout,
-          maxBuffer: 10 * 1024 * 1024 // 10MB buffer
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+          env: {
+            ...process.env,
+            CLOUDSDK_CONFIG: account.configDir
+          }
         });
 
         // 检查文件是否成功下载
@@ -159,12 +164,12 @@ class CloudShellDownloader {
 
   /**
    * 处理FTP失败后的文件下载
-   * @param {number} accountId - GCloud账户ID
+   * @param {Object} account - GCloud账户对象
    * @param {string} scriptOutput - 脚本输出
    * @returns {Promise<Object>} 下载结果
    */
-  async handleFtpFailure(accountId, scriptOutput) {
-    logger.info(`Checking for FTP failure and download requirements for account ${accountId}`);
+  async handleFtpFailure(account, scriptOutput) {
+    logger.info(`Checking for FTP failure and download requirements for account ${account.email}`);
 
     // 解析下载信息
     const downloadInfo = this.parseDownloadInfo(scriptOutput);
@@ -178,7 +183,7 @@ class CloudShellDownloader {
 
     // 从Cloud Shell下载文件
     const downloadResult = await this.downloadFromCloudShell(
-      accountId,
+      account,
       downloadInfo.keysDir,
       downloadInfo.failedFiles
     );
