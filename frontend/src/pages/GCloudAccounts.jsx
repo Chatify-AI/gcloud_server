@@ -49,7 +49,13 @@ import {
   Search as SearchIcon,
   AttachMoney as MoneyIcon,
   Analytics as AnalyticsIcon,
-  TrendingUp as TrendingUpIcon
+  TrendingUp as TrendingUpIcon,
+  FilterAlt as FilterIcon,
+  Clear as ClearIcon,
+  CheckBox as CheckBoxIcon,
+  CheckBoxOutlineBlank as CheckBoxOutlineBlankIcon,
+  Sync as SyncIcon,
+  DeleteSweep as DeleteSweepIcon
 } from '@mui/icons-material'
 import axios from 'axios'
 import { toast } from 'react-toastify'
@@ -78,7 +84,7 @@ function GCloudAccounts() {
   // 分页和搜索相关状态
   const [pagination, setPagination] = useState({
     page: 1,
-    pageSize: 50,
+    pageSize: 100,
     total: 0,
     totalPages: 0,
     showAll: false
@@ -86,9 +92,24 @@ function GCloudAccounts() {
   const [searchTerm, setSearchTerm] = useState('')
   const [searchInput, setSearchInput] = useState('')
 
+  // 时间筛选相关状态
+  const [dateFilter, setDateFilter] = useState({
+    createdFrom: '',
+    createdTo: ''
+  })
+
   // 消费数据相关状态
   const [consumptionData, setConsumptionData] = useState({})
   const [loadingConsumption, setLoadingConsumption] = useState({})
+
+  // 全选功能相关状态
+  const [selectedAccounts, setSelectedAccounts] = useState([])
+  const [allSelected, setAllSelected] = useState(false)
+
+  // 批量操作相关状态
+  const [syncing, setSyncing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [operationProgress, setOperationProgress] = useState(null)
 
   // 统计数据计算
   const statistics = useMemo(() => {
@@ -129,7 +150,9 @@ function GCloudAccounts() {
         page: pagination.page,
         pageSize: pagination.pageSize,
         showAll: pagination.showAll,
-        search: searchTerm
+        search: searchTerm,
+        createdFrom: dateFilter.createdFrom,
+        createdTo: dateFilter.createdTo
       }
 
       const response = await axios.get('/api/gcloud-accounts', { params })
@@ -151,6 +174,47 @@ function GCloudAccounts() {
     }
   }
 
+  // 单个账户获取消费数据（带重试）
+  const fetchSingleConsumption = async (accountId, retries = 3) => {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const response = await axios.get(`/api/gcloud-accounts/${accountId}/consumption`)
+
+        if (response.data.success) {
+          return {
+            accountId,
+            success: true,
+            data: response.data.consumption,
+            message: response.data.message
+          }
+        } else {
+          if (attempt === retries) {
+            return {
+              accountId,
+              success: false,
+              error: response.data.message || 'Failed to fetch consumption',
+              message: response.data.message
+            }
+          }
+          // 等待1秒后重试
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      } catch (error) {
+        console.warn(`Attempt ${attempt}/${retries} failed for account ${accountId}:`, error.message)
+        if (attempt === retries) {
+          return {
+            accountId,
+            success: false,
+            error: error.message || 'Network error',
+            message: 'Failed to fetch consumption data'
+          }
+        }
+        // 等待1秒后重试
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    }
+  }
+
   const fetchConsumptionData = async (accountList) => {
     const accountIds = accountList.map(acc => acc.id)
 
@@ -161,34 +225,118 @@ function GCloudAccounts() {
     })
     setLoadingConsumption(loadingState)
 
-    try {
-      const response = await axios.post('/api/gcloud-accounts/batch-consumption', {
-        accountIds
-      })
+    // 批量并发获取消费数据
+    const fetchPromises = accountIds.map(async (accountId) => {
+      try {
+        console.log(`Fetching consumption data for account ${accountId}...`)
+        const result = await fetchSingleConsumption(accountId)
 
-      if (response.data.success) {
-        const consumptionMap = {}
-        response.data.results.forEach(result => {
-          consumptionMap[result.accountId] = {
+        // 更新单个账户的消费数据
+        setConsumptionData(prev => ({
+          ...prev,
+          [accountId]: {
             success: result.success,
-            data: result.consumption,
+            data: result.data,
             error: result.error,
             message: result.message
           }
+        }))
+
+        // 清除该账户的加载状态
+        setLoadingConsumption(prev => {
+          const newState = { ...prev }
+          delete newState[accountId]
+          return newState
         })
-        setConsumptionData(prev => ({ ...prev, ...consumptionMap }))
+
+        return { accountId, success: true }
+      } catch (error) {
+        console.error(`Error fetching consumption for account ${accountId}:`, error)
+
+        // 设置错误状态
+        setConsumptionData(prev => ({
+          ...prev,
+          [accountId]: {
+            success: false,
+            error: error.message,
+            message: 'Failed to fetch consumption data'
+          }
+        }))
+
+        // 清除该账户的加载状态
+        setLoadingConsumption(prev => {
+          const newState = { ...prev }
+          delete newState[accountId]
+          return newState
+        })
+
+        return { accountId, success: false, error: error.message }
       }
+    })
+
+    // 等待所有请求完成
+    try {
+      const results = await Promise.allSettled(fetchPromises)
+      console.log('All consumption data fetch completed:', results)
     } catch (error) {
-      console.error('Error fetching consumption data:', error)
-    } finally {
-      // 清除加载状态
-      setLoadingConsumption({})
+      console.error('Error in batch consumption fetch:', error)
     }
   }
 
   const handleSearch = () => {
     setSearchTerm(searchInput)
     setPagination(prev => ({ ...prev, page: 1 }))
+  }
+
+  const handleDateFilterChange = (field, value) => {
+    setDateFilter(prev => ({ ...prev, [field]: value }))
+  }
+
+  const handleApplyDateFilter = () => {
+    setPagination(prev => ({ ...prev, page: 1 }))
+    fetchAccounts()
+  }
+
+  const handleResetFilters = () => {
+    setSearchInput('')
+    setSearchTerm('')
+    setDateFilter({ createdFrom: '', createdTo: '' })
+    setPagination(prev => ({ ...prev, page: 1 }))
+
+    // 立即应用重置
+    setTimeout(() => {
+      fetchAccounts()
+    }, 0)
+  }
+
+  const handleQuickDateFilter = (days) => {
+    const today = new Date()
+    const startDate = new Date()
+
+    if (days === 0) {
+      // 今天
+      startDate.setHours(0, 0, 0, 0)
+      today.setHours(23, 59, 59, 999)
+    } else {
+      // 最近N天
+      startDate.setDate(today.getDate() - days + 1)
+      startDate.setHours(0, 0, 0, 0)
+      today.setHours(23, 59, 59, 999)
+    }
+
+    const fromDateStr = startDate.toISOString().split('T')[0]
+    const toDateStr = today.toISOString().split('T')[0]
+
+    setDateFilter({
+      createdFrom: fromDateStr,
+      createdTo: toDateStr
+    })
+    setPagination(prev => ({ ...prev, page: 1 }))
+
+    // 立即应用筛选
+    setTimeout(() => {
+      fetchAccounts()
+    }, 0)
   }
 
   const handleKeyPress = (event) => {
@@ -206,7 +354,7 @@ function GCloudAccounts() {
     const showAll = newPageSize === 'all'
     setPagination(prev => ({
       ...prev,
-      pageSize: showAll ? 50 : newPageSize,
+      pageSize: showAll ? 100 : newPageSize,
       showAll,
       page: 1
     }))
@@ -401,13 +549,15 @@ function GCloudAccounts() {
     if (consumption.data) {
       const amount = consumption.data.totalAmount || 0
       return (
-        <Box display="flex" alignItems="center" gap={0.5}>
-          <MoneyIcon fontSize="small" color="primary" />
-          <Typography variant="body2" fontWeight="medium" color="primary">
-            ${amount.toFixed(4)}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            ({consumption.data.totalChannels} channels)
+        <Box display="flex" flexDirection="column" alignItems="flex-start" gap={0.2}>
+          <Box display="flex" alignItems="center" gap={0.5}>
+            <MoneyIcon fontSize="small" color="primary" />
+            <Typography variant="body2" fontWeight="medium" color="primary" sx={{ fontSize: '0.85rem' }}>
+              ${amount.toFixed(4)}
+            </Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem', ml: 2.5 }}>
+            {consumption.data.totalChannels} 个渠道
           </Typography>
         </Box>
       )
@@ -423,6 +573,380 @@ function GCloudAccounts() {
   const handleViewTestDetails = (testDetails) => {
     setSelectedTestDetails(testDetails)
     setTestDetailsDialog(true)
+  }
+
+  // 全选功能 - 只选择未监听的账户
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setSelectedAccounts([])
+      setAllSelected(false)
+    } else {
+      // 只选择未监听的账户
+      const unmonitoredIds = accounts
+        .filter(acc => !acc.needMonitor)
+        .map(acc => acc.id);
+
+      setSelectedAccounts(unmonitoredIds)
+      setAllSelected(unmonitoredIds.length === accounts.length)
+    }
+  }
+
+  const handleSelectAccount = (accountId) => {
+    // 检查该账户是否为未监听状态
+    const account = accounts.find(acc => acc.id === accountId);
+
+    // 只允许选择未监听的账户
+    if (account && account.needMonitor) {
+      toast.warning('只能选择未监听的账户');
+      return;
+    }
+
+    setSelectedAccounts(prev => {
+      if (prev.includes(accountId)) {
+        const newSelected = prev.filter(id => id !== accountId)
+        setAllSelected(false)
+        return newSelected
+      } else {
+        const newSelected = [...prev, accountId]
+        const unmonitoredCount = accounts.filter(acc => !acc.needMonitor).length;
+        setAllSelected(newSelected.length === unmonitoredCount)
+        return newSelected
+      }
+    })
+  }
+
+  // 自动选择未监听的账号
+  const handleSelectUnmonitored = () => {
+    const unmonitoredIds = accounts
+      .filter(acc => !acc.needMonitor)
+      .map(acc => acc.id)
+    setSelectedAccounts(unmonitoredIds)
+    const totalUnmonitored = accounts.filter(acc => !acc.needMonitor).length;
+    setAllSelected(unmonitoredIds.length === totalUnmonitored && totalUnmonitored === accounts.length)
+  }
+
+  // 单个账户同步（带重试）
+  const syncSingleAccount = async (accountData, retries = 3) => {
+    const accountId = accountData.id
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        // 准备完整的账户数据
+        const consumption = consumptionData[accountId]
+        const accountSyncData = {
+          id: accountData.id,
+          email: accountData.email,
+          consumptionAmount: consumption?.success ? consumption.data?.totalAmount : 0,
+          scriptExecutionCount: accountData.scriptExecutionCount,
+          createdAt: accountData.createdAt,
+          lastMonitorTime: accountData.lastMonitorTime
+        }
+
+        const response = await axios.post('/api/gcloud-accounts/batch-sync', {
+          accountsData: [accountSyncData]
+        })
+
+        if (response.data.success && response.data.results.length > 0) {
+          const result = response.data.results[0]
+
+          // 如果成功或者不是"Failed to get channels data"类型的错误，直接返回
+          if (result.success || (result.error && !result.error.includes('Failed to get channels data'))) {
+            return result
+          }
+
+          // 如果是"Failed to get channels data"错误且还有重试机会
+          if (attempt < retries && result.error && result.error.includes('Failed to get channels data')) {
+            console.warn(`Attempt ${attempt}/${retries} failed for account ${accountId}: ${result.error}`)
+            // 等待2秒后重试
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            continue
+          }
+
+          return result
+        } else {
+          if (attempt === retries) {
+            return {
+              accountId,
+              success: false,
+              error: 'Sync API call failed',
+              message: response.data.message || 'Unknown error'
+            }
+          }
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+      } catch (error) {
+        console.warn(`Attempt ${attempt}/${retries} failed for account ${accountId}:`, error.message)
+        if (attempt === retries) {
+          return {
+            accountId,
+            success: false,
+            error: error.message || 'Network error',
+            message: 'Failed to sync account'
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    }
+  }
+
+  // 批量同步功能（一次性处理）
+  const handleBatchSync = async () => {
+    if (selectedAccounts.length === 0) {
+      toast.error('请选择要同步的账户')
+      return
+    }
+
+    setSyncing(true)
+
+    try {
+      // 准备所有选中账户的完整数据
+      const accountsData = selectedAccounts.map(accountId => {
+        const account = accounts.find(acc => acc.id === accountId)
+        const consumption = consumptionData[accountId]
+
+        return {
+          id: account.id,
+          email: account.email,
+          consumptionAmount: consumption?.success ? consumption.data?.totalAmount : 0,
+          scriptExecutionCount: account.scriptExecutionCount,
+          createdAt: account.createdAt,
+          lastMonitorTime: account.lastMonitorTime
+        }
+      })
+
+      console.log(`Starting batch sync for ${accountsData.length} accounts...`)
+
+      // 设置进度
+      setOperationProgress({
+        type: 'sync',
+        total: accountsData.length,
+        completed: 0,
+        failed: 0,
+        results: [],
+        currentAccount: '准备批量同步...',
+        progress: 0
+      })
+
+      // 一次性发送所有数据
+      const response = await axios.post('/api/gcloud-accounts/batch-sync', {
+        accountsData: accountsData
+      })
+
+      if (response.data.success) {
+        const { results, summary } = response.data
+
+        // 更新最终进度
+        setOperationProgress({
+          type: 'sync',
+          total: summary.total,
+          completed: summary.success,
+          failed: summary.failed,
+          results: results,
+          currentAccount: '批量同步完成',
+          progress: 100
+        })
+
+        if (summary.success > 0) {
+          toast.success(`同步完成：成功 ${summary.success} 个，失败 ${summary.failed} 个`)
+        } else {
+          toast.error(`同步失败：${summary.failed} 个账户都失败了`)
+        }
+
+        console.log(`Batch sync completed: ${summary.success}/${summary.total} accounts synced`)
+      } else {
+        toast.error('批量同步失败')
+      }
+
+    } catch (error) {
+      console.error('Error in batch sync:', error)
+      toast.error(`批量同步过程中出现错误: ${error.message}`)
+    } finally {
+      setSyncing(false)
+      // 保持进度显示3秒后清除
+      setTimeout(() => {
+        setOperationProgress(null)
+      }, 3000)
+    }
+  }
+
+  // 批量删除渠道功能（流式处理）
+  const handleBatchDeleteChannels = async () => {
+    if (selectedAccounts.length === 0) {
+      toast.error('请选择要删除渠道的账户')
+      return
+    }
+
+    if (!window.confirm(`确定要删除 ${selectedAccounts.length} 个账户的所有渠道并删除对应的GCloud账户吗？\n\n此操作不可逆！`)) {
+      return
+    }
+
+    setDeleting(true)
+
+    try {
+      // 创建SSE连接
+      const response = await fetch('/api/gcloud-accounts/batch-delete-channels', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          accountIds: selectedAccounts
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      let buffer = ''
+      const results = []
+      let totalDeleted = 0
+      let totalFailed = 0
+
+      // 初始化进度
+      setOperationProgress({
+        type: 'delete',
+        total: selectedAccounts.length,
+        completed: 0,
+        failed: 0,
+        results: [],
+        currentAccount: '准备删除...',
+        progress: 0
+      })
+
+      // 读取流数据
+      while (true) {
+        const { done, value } = await reader.read()
+
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6)
+
+            if (data === '[DONE]') {
+              console.log('Stream completed')
+              break
+            }
+
+            try {
+              const event = JSON.parse(data)
+              console.log('SSE Event:', event)
+
+              switch (event.type) {
+                case 'start':
+                  toast.info(event.message)
+                  break
+
+                case 'processing':
+                  setOperationProgress(prev => ({
+                    ...prev,
+                    currentAccount: event.email,
+                    progress: event.progress || 0,
+                    message: event.message
+                  }))
+                  break
+
+                case 'data_synced':
+                  // 数据同步完成
+                  setOperationProgress(prev => ({
+                    ...prev,
+                    message: event.message
+                  }))
+                  break
+
+                case 'sync_failed':
+                  // 数据同步失败但继续删除
+                  console.warn('Sync failed:', event.message)
+                  break
+
+                case 'channels_processed':
+                  // 渠道删除完成的反馈
+                  break
+
+                case 'account_deleted':
+                  totalDeleted++
+                  break
+
+                case 'account_delete_failed':
+                case 'account_failed':
+                  totalFailed++
+                  break
+
+                case 'account_completed':
+                  results.push({
+                    accountId: event.accountId,
+                    email: event.email,
+                    channelsDeleted: event.channelsDeleted,
+                    channelsFailed: event.channelsFailed,
+                    accountDeleted: event.accountDeleted
+                  })
+
+                  setOperationProgress(prev => ({
+                    ...prev,
+                    completed: totalDeleted,
+                    failed: totalFailed,
+                    results: [...results],
+                    currentAccount: event.email,
+                    progress: event.progress || 0
+                  }))
+                  break
+
+                case 'completed':
+                  setOperationProgress(prev => ({
+                    ...prev,
+                    completed: event.summary.deletedAccounts,
+                    failed: event.summary.failedAccounts + event.summary.failedChannels,
+                    currentAccount: '删除完成',
+                    progress: 100,
+                    message: event.message
+                  }))
+
+                  toast.success(event.message)
+
+                  // 刷新账户列表
+                  await fetchAccounts()
+
+                  // 清空选择
+                  setSelectedAccounts([])
+                  setAllSelected(false)
+
+                  // 3秒后清除进度显示
+                  setTimeout(() => {
+                    setOperationProgress(null)
+                  }, 3000)
+                  break
+
+                case 'error':
+                  toast.error(event.message)
+                  setOperationProgress(prev => ({
+                    ...prev,
+                    currentAccount: '删除出错',
+                    message: event.message
+                  }))
+                  break
+              }
+            } catch (parseError) {
+              console.error('Error parsing SSE data:', parseError)
+            }
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('Error in batch delete:', error)
+      toast.error(`批量删除过程中发生错误: ${error.message}`)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (loading && accounts.length === 0) {
@@ -530,7 +1054,7 @@ function GCloudAccounts() {
 
       {/* 搜索和控制区域 */}
       <Paper sx={{ p: 2, mb: 2 }}>
-        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap" mb={2}>
           <TextField
             placeholder="搜索邮箱、项目ID或项目名称..."
             value={searchInput}
@@ -561,8 +1085,8 @@ function GCloudAccounts() {
               onChange={handlePageSizeChange}
               label="页面大小"
             >
-              <MenuItem value={50}>50条</MenuItem>
               <MenuItem value={100}>100条</MenuItem>
+              <MenuItem value={200}>200条</MenuItem>
               <MenuItem value="all">全部</MenuItem>
             </Select>
           </FormControl>
@@ -570,28 +1094,307 @@ function GCloudAccounts() {
             <CircularProgress size={20} />
           )}
         </Box>
+
+        {/* 时间筛选区域 */}
+        <Box display="flex" gap={2} alignItems="center" flexWrap="wrap">
+          <Box display="flex" alignItems="center" gap={1}>
+            <FilterIcon color="action" />
+            <Typography variant="body2" color="text.secondary">
+              按创建时间筛选:
+            </Typography>
+          </Box>
+          <TextField
+            label="开始日期"
+            type="date"
+            size="small"
+            value={dateFilter.createdFrom}
+            onChange={(e) => handleDateFilterChange('createdFrom', e.target.value)}
+            InputLabelProps={{
+              shrink: true,
+            }}
+            sx={{ minWidth: 150 }}
+          />
+          <Typography variant="body2" color="text.secondary">
+            至
+          </Typography>
+          <TextField
+            label="结束日期"
+            type="date"
+            size="small"
+            value={dateFilter.createdTo}
+            onChange={(e) => handleDateFilterChange('createdTo', e.target.value)}
+            InputLabelProps={{
+              shrink: true,
+            }}
+            sx={{ minWidth: 150 }}
+          />
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleApplyDateFilter}
+            startIcon={<FilterIcon />}
+            disabled={!dateFilter.createdFrom && !dateFilter.createdTo}
+          >
+            筛选
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleResetFilters}
+            startIcon={<ClearIcon />}
+            disabled={!searchTerm && !dateFilter.createdFrom && !dateFilter.createdTo}
+          >
+            清除筛选
+          </Button>
+        </Box>
+
+        {/* 快捷时间筛选按钮 */}
+        <Box display="flex" gap={1} alignItems="center" flexWrap="wrap" mt={2}>
+          <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
+            快捷筛选:
+          </Typography>
+          <Button
+            variant={dateFilter.createdFrom && dateFilter.createdTo &&
+              new Date(dateFilter.createdFrom).toDateString() === new Date().toDateString() ? 'contained' : 'outlined'}
+            size="small"
+            onClick={() => handleQuickDateFilter(0)}
+            sx={{ minWidth: 60 }}
+          >
+            今天
+          </Button>
+          {[2, 3, 4, 5, 6, 7].map((days) => (
+            <Button
+              key={days}
+              variant="outlined"
+              size="small"
+              onClick={() => handleQuickDateFilter(days)}
+              sx={{ minWidth: 80 }}
+            >
+              最近{days}天
+            </Button>
+          ))}
+        </Box>
+
+        {/* 批量操作区域 */}
+        {selectedAccounts.length > 0 && (
+          <Box display="flex" gap={2} alignItems="center" mt={2} p={2} bgcolor="primary.50" borderRadius={1}>
+            <Typography variant="body2" color="primary" fontWeight="medium">
+              已选择 {selectedAccounts.length} 个账户
+            </Typography>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<SyncIcon />}
+              onClick={handleBatchSync}
+              disabled={syncing || deleting}
+            >
+              {syncing ? <CircularProgress size={16} /> : '同步到汇总表'}
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              size="small"
+              startIcon={<DeleteSweepIcon />}
+              onClick={handleBatchDeleteChannels}
+              disabled={syncing || deleting}
+            >
+              {deleting ? <CircularProgress size={16} /> : '删除渠道+账户'}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                setSelectedAccounts([])
+                setAllSelected(false)
+              }}
+            >
+              取消选择
+            </Button>
+          </Box>
+        )}
+
+        {/* 操作进度显示 */}
+        {operationProgress && (
+          <Box mt={2} p={2} bgcolor="grey.50" borderRadius={1}>
+            <Typography variant="h6" gutterBottom>
+              {operationProgress.type === 'sync' ? '同步进度' : '删除进度'}
+            </Typography>
+
+            {operationProgress.type === 'sync' && (
+              <>
+                <Typography variant="body2" gutterBottom>
+                  总计: {operationProgress.total} 个账户，
+                  成功: {operationProgress.completed} 个，
+                  失败: {operationProgress.failed} 个
+                  {operationProgress.progress && ` (${operationProgress.progress}%)`}
+                </Typography>
+
+                {operationProgress.currentAccount && (
+                  <Typography variant="body2" color="primary" gutterBottom>
+                    当前处理: {operationProgress.currentAccount}
+                  </Typography>
+                )}
+
+                {syncing && operationProgress.progress && (
+                  <Box sx={{ width: '100%', mt: 1, mb: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <Box sx={{ width: '100%', mr: 1 }}>
+                        <Box
+                          sx={{
+                            width: '100%',
+                            height: 8,
+                            backgroundColor: 'grey.300',
+                            borderRadius: 4,
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <Box
+                            sx={{
+                              width: `${operationProgress.progress}%`,
+                              height: '100%',
+                              backgroundColor: 'primary.main',
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </Box>
+                      </Box>
+                      <Box sx={{ minWidth: 35 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          {operationProgress.progress}%
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Box>
+                )}
+              </>
+            )}
+
+            {operationProgress.type === 'delete' && (
+              <>
+                <Typography variant="body2" gutterBottom>
+                  总计: {operationProgress.total} 个账户，
+                  成功: {operationProgress.completed} 个，
+                  失败: {operationProgress.failed} 个
+                  {operationProgress.progress && ` (${operationProgress.progress}%)`}
+                </Typography>
+
+                {operationProgress.currentAccount && (
+                  <Typography variant="body2" color="primary" gutterBottom>
+                    当前处理: {operationProgress.currentAccount}
+                  </Typography>
+                )}
+
+                {operationProgress.message && (
+                  <Typography variant="body2" color="text.secondary" gutterBottom>
+                    {operationProgress.message}
+                  </Typography>
+                )}
+
+                {deleting && operationProgress.progress !== undefined && (
+                  <Box sx={{ width: '100%', mt: 1, mb: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <Box sx={{ width: '100%', mr: 1 }}>
+                        <Box
+                          sx={{
+                            height: 8,
+                            borderRadius: 1,
+                            backgroundColor: 'grey.300',
+                            position: 'relative',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <Box
+                            sx={{
+                              width: `${operationProgress.progress}%`,
+                              height: '100%',
+                              backgroundColor: 'error.main',
+                              transition: 'width 0.3s ease-in-out'
+                            }}
+                          />
+                        </Box>
+                      </Box>
+                      <Box sx={{ minWidth: 35 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          {operationProgress.progress}%
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Box>
+                )}
+
+                {operationProgress.results && operationProgress.results.length > 0 && (
+                  <Box sx={{ mt: 1, maxHeight: 200, overflow: 'auto' }}>
+                    <Typography variant="caption" display="block" gutterBottom>
+                      处理详情:
+                    </Typography>
+                    {operationProgress.results.map((result, index) => (
+                      <Typography key={index} variant="caption" display="block" sx={{
+                        color: result.accountDeleted ? 'success.main' : 'error.main',
+                        fontSize: '0.7rem'
+                      }}>
+                        {result.email}:
+                        渠道删除 {result.channelsDeleted}/{result.channelsDeleted + result.channelsFailed}，
+                        账户{result.accountDeleted ? '已删除' : '删除失败'}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+              </>
+            )}
+
+            {!syncing && !deleting && (
+              <Button
+                size="small"
+                onClick={() => setOperationProgress(null)}
+                sx={{ mt: 1 }}
+              >
+                关闭
+              </Button>
+            )}
+          </Box>
+        )}
       </Paper>
 
       <TableContainer component={Paper}>
         <Table size="small" sx={{ tableLayout: 'fixed' }}>
           <TableHead>
             <TableRow>
-              <TableCell sx={{ width: '20%', minWidth: 180 }}>邮箱</TableCell>
-              <TableCell sx={{ width: '15%', minWidth: 120 }}>项目信息</TableCell>
-              <TableCell sx={{ width: '8%', minWidth: 60 }}>状态</TableCell>
-              <TableCell sx={{ width: '12%', minWidth: 100 }}>消费金额</TableCell>
-              <TableCell sx={{ width: '10%', minWidth: 80 }}>监听状态</TableCell>
-              <TableCell sx={{ width: '10%', minWidth: 80 }}>脚本次数</TableCell>
-              <TableCell sx={{ width: '15%', minWidth: 120 }}>上次监听时间</TableCell>
-              <TableCell align="right" sx={{ width: '10%', minWidth: 120 }}>操作</TableCell>
+              <TableCell sx={{ width: '5%', minWidth: 60 }}>
+                <Box display="flex" alignItems="center" gap={1}>
+                  <IconButton
+                    size="small"
+                    onClick={handleSelectAll}
+                    color={allSelected ? 'primary' : 'default'}
+                  >
+                    {allSelected ? <CheckBoxIcon /> : <CheckBoxOutlineBlankIcon />}
+                  </IconButton>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={handleSelectUnmonitored}
+                    sx={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                  >
+                    选未监听
+                  </Button>
+                </Box>
+              </TableCell>
+              <TableCell sx={{ width: '15%', minWidth: 160 }}>邮箱</TableCell>
+              <TableCell sx={{ width: '12%', minWidth: 120 }}>项目信息</TableCell>
+              <TableCell sx={{ width: '6%', minWidth: 60 }}>状态</TableCell>
+              <TableCell sx={{ width: '10%', minWidth: 100 }}>消费金额</TableCell>
+              <TableCell sx={{ width: '10%', minWidth: 100 }}>监听状态</TableCell>
+              <TableCell sx={{ width: '8%', minWidth: 80 }}>脚本次数</TableCell>
+              <TableCell sx={{ width: '12%', minWidth: 120 }}>创建时间</TableCell>
+              <TableCell sx={{ width: '12%', minWidth: 120 }}>上次监听时间</TableCell>
+              <TableCell align="right" sx={{ width: '14%', minWidth: 120 }}>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {accounts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
-                  {searchTerm ?
-                    `没有找到匹配 "${searchTerm}" 的账户。请尝试其他搜索词。` :
+                <TableCell colSpan={10} align="center">
+                  {searchTerm || dateFilter.createdFrom || dateFilter.createdTo ?
+                    '没有找到匹配筛选条件的账户。请尝试调整搜索词或时间范围。' :
                     '没有找到账户。点击"添加账户"来连接您的第一个Google Cloud账户。'
                   }
                 </TableCell>
@@ -599,6 +1402,15 @@ function GCloudAccounts() {
             ) : (
               accounts.map((account) => (
                 <TableRow key={account.id}>
+                  <TableCell sx={{ padding: '8px' }}>
+                    <IconButton
+                      size="small"
+                      onClick={() => handleSelectAccount(account.id)}
+                      color={selectedAccounts.includes(account.id) ? 'primary' : 'default'}
+                    >
+                      {selectedAccounts.includes(account.id) ? <CheckBoxIcon /> : <CheckBoxOutlineBlankIcon />}
+                    </IconButton>
+                  </TableCell>
                   <TableCell sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     <Box display="flex" alignItems="center" gap={0.5}>
                       <Avatar sx={{ width: 20, height: 20, fontSize: '0.7rem' }}>
@@ -667,16 +1479,14 @@ function GCloudAccounts() {
                   <TableCell>
                     {renderConsumptionCell(account)}
                   </TableCell>
-                  <TableCell sx={{ textAlign: 'center' }}>
-                    <Box display="flex" flexDirection="column" alignItems="center" gap={0.5}>
+                  <TableCell>
+                    <Box display="flex" alignItems="center" justifyContent="center">
                       <Switch
                         checked={account.needMonitor || false}
                         onChange={() => handleToggleMonitoring(account.id, account.needMonitor)}
                         size="small"
+                        title={account.needMonitor ? '监听已开启' : '监听已关闭'}
                       />
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
-                        {account.needMonitor ? '开启' : '关闭'}
-                      </Typography>
                     </Box>
                   </TableCell>
                   <TableCell>
@@ -695,6 +1505,24 @@ function GCloudAccounts() {
                         sx={{ cursor: 'pointer' }}
                       />
                     </Box>
+                  </TableCell>
+                  <TableCell>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontSize: '0.7rem',
+                        display: 'block'
+                      }}
+                    >
+                      {account.createdAt ? (
+                        <>
+                          <div>{new Date(account.createdAt).toLocaleDateString()}</div>
+                          <div>{new Date(account.createdAt).toLocaleTimeString()}</div>
+                        </>
+                      ) : (
+                        'N/A'
+                      )}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography

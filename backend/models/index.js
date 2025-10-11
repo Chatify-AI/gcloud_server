@@ -6,6 +6,7 @@ const ApiKey = require('./ApiKey');
 const ExecutionHistory = require('./ExecutionHistory');
 const ChannelAutoLog = require('./ChannelAutoLog');
 const GCloudMonitorLog = require('./GCloudMonitorLog');
+const AccountSummary = require('./AccountSummary');
 
 // GCloudAccount和CommandExecution的关系
 GCloudAccount.hasMany(CommandExecution, {
@@ -37,5 +38,6 @@ module.exports = {
   ApiKey,
   ExecutionHistory,
   ChannelAutoLog,
-  GCloudMonitorLog
+  GCloudMonitorLog,
+  AccountSummary
 };

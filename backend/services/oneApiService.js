@@ -565,7 +565,7 @@ class OneApiService {
           type: 24,
           max_input_tokens: 0,
           other: "",
-          models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-lite-preview-06-17,gemini-2.5-flash-nothinking,gemini-2.5-flash-thinking,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-thinking,gemini-2.5-flash-lite,gemini-2.5-pro-thinking-*,gemini-2.5-flash-thinking-*,gemini-2.5-flash-lite-thinking-*",
+          models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-image,gemini-2.5-flash-image-preview,gemini-2.5-flash-lite,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite-preview-09-2025-nothinking,gemini-2.5-flash-lite-preview-09-2025-thinking,gemini-2.5-flash-lite-preview-09-2025-thinking-*,gemini-2.5-flash-lite-thinking-*,gemini-2.5-flash-nothinking,gemini-2.5-flash-preview-09-2025,gemini-2.5-flash-preview-09-2025-nothinking,gemini-2.5-flash-preview-09-2025-thinking,gemini-2.5-flash-preview-09-2025-thinking-*,gemini-2.5-flash-preview-native-audio-dialog,gemini-2.5-flash-preview-tts,gemini-2.5-flash-thinking,gemini-2.5-flash-thinking-*,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-preview-06-05,gemini-2.5-pro-preview-06-05-nothinking,gemini-2.5-pro-preview-06-05-thinking,gemini-2.5-pro-preview-06-05-thinking-*,gemini-2.5-pro-preview-tts,gemini-2.5-pro-thinking,gemini-2.5-pro-thinking-*,gemini-flash-latest,gemini-flash-latest-nothinking,gemini-flash-latest-thinking,gemini-flash-latest-thinking-*,gemini-flash-lite-latest,gemini-flash-lite-latest-nothinking,gemini-flash-lite-latest-thinking,gemini-flash-lite-latest-thinking-*,gemini-pro-latest,gemini-pro-latest-nothinking,gemini-pro-latest-thinking,gemini-pro-latest-thinking-*,imagen-3.0-generate-002,imagen-4.0-fast-generate-001,imagen-4.0-generate-001,imagen-4.0-ultra-generate-001,veo-2.0-generate-001,veo-3.0-fast-generate-preview,veo-3.0-generate-preview",
           auto_ban: 0,
           failure_timeout_ban_limit: 12000,
           enable_timestamp_granularity: 0,
@@ -665,7 +665,7 @@ class OneApiService {
           type: 41,
           openai_organization: "",
           max_input_tokens: 0,
-          models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-lite-preview-06-17,gemini-2.5-flash-nothinking,gemini-2.5-flash-thinking,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-thinking,gemini-2.5-flash-lite,gemini-2.5-pro-thinking-*,gemini-2.5-flash-thinking-*,gemini-2.5-flash-lite-thinking-*",
+          models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-image,gemini-2.5-flash-image-preview,gemini-2.5-flash-lite,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite-preview-09-2025-nothinking,gemini-2.5-flash-lite-preview-09-2025-thinking,gemini-2.5-flash-lite-preview-09-2025-thinking-*,gemini-2.5-flash-lite-thinking-*,gemini-2.5-flash-nothinking,gemini-2.5-flash-preview-09-2025,gemini-2.5-flash-preview-09-2025-nothinking,gemini-2.5-flash-preview-09-2025-thinking,gemini-2.5-flash-preview-09-2025-thinking-*,gemini-2.5-flash-preview-native-audio-dialog,gemini-2.5-flash-preview-tts,gemini-2.5-flash-thinking,gemini-2.5-flash-thinking-*,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-preview-06-05,gemini-2.5-pro-preview-06-05-nothinking,gemini-2.5-pro-preview-06-05-thinking,gemini-2.5-pro-preview-06-05-thinking-*,gemini-2.5-pro-preview-tts,gemini-2.5-pro-thinking,gemini-2.5-pro-thinking-*,gemini-flash-latest,gemini-flash-latest-nothinking,gemini-flash-latest-thinking,gemini-flash-latest-thinking-*,gemini-flash-lite-latest,gemini-flash-lite-latest-nothinking,gemini-flash-lite-latest-thinking,gemini-flash-lite-latest-thinking-*,gemini-pro-latest,gemini-pro-latest-nothinking,gemini-pro-latest-thinking,gemini-pro-latest-thinking-*,imagen-3.0-generate-002,imagen-4.0-fast-generate-001,imagen-4.0-generate-001,imagen-4.0-ultra-generate-001,veo-2.0-generate-001,veo-3.0-fast-generate-preview,veo-3.0-generate-preview",
           auto_ban: 0,
           failure_timeout_ban_limit: 12000,
           enable_timestamp_granularity: 0,
@@ -676,7 +676,7 @@ class OneApiService {
           price: 0,
           multi_key_mode: "random",
           name: name,
-          other: "{\"default\":\"global\",\"gemini-2.0-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-preview-image-generation\":\"global\",\"gemini-2.5-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite-preview-06-17\":\"global\",\"gemini-2.5-flash-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\"}",
+          other: "{\"default\":\"global\",\"gemini-2.0-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-lite-001\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.0-flash-preview-image-generation\":\"global\",\"gemini-2.5-flash\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-lite-preview-06-17\":\"global\",\"gemini-2.5-flash-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-flash-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-nothinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-2.5-pro-thinking-*\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\",\"gemini-flash-latest\":\"europe-central2,europe-north1,europe-southwest1,europe-west1,europe-west4,europe-west8,europe-west9,global,us-central1,us-east1,us-east4,us-east5,us-south1,us-west1,us-west4\"}",
           base_url: "",
           test_model: "",
           model_mapping: "",
@@ -999,6 +999,107 @@ class OneApiService {
     } catch (error) {
       logger.error(`Failed to suspend channel ${channelId}:`, error.message);
       throw new Error(`挂起渠道失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 删除渠道
+   * @param {number} channelId - 渠道ID
+   * @returns {Promise<Object>}
+   */
+  async deleteChannel(channelId) {
+    try {
+      logger.info(`Deleting channel ${channelId}`);
+
+      const response = await axios.delete(
+        `${this.baseUrl}/api/channel/${channelId}`,
+        {
+          headers: this.getHeaders(),
+          timeout: 10000
+        }
+      );
+
+      if (response.data.success) {
+        logger.info(`Successfully deleted channel ${channelId}`);
+      } else {
+        logger.warn(`Failed to delete channel ${channelId}: ${response.data.message}`);
+      }
+
+      return response.data;
+    } catch (error) {
+      logger.error(`Failed to delete channel ${channelId}:`, error.message);
+      throw new Error(`删除渠道失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 批量删除账户的所有渠道
+   * @param {string} accountEmail - 账户邮箱
+   * @returns {Promise<{deleted: Array, failed: Array}>}
+   */
+  async deleteAccountChannels(accountEmail) {
+    try {
+      logger.info(`Starting to delete all channels for account: ${accountEmail}`);
+
+      // 搜索该账户的所有渠道
+      const searchResult = await this.searchChannels({
+        keyword: accountEmail,
+        page: 1,
+        pageSize: 100
+      });
+
+      if (!searchResult.success || !searchResult.data) {
+        throw new Error('Failed to get account channels');
+      }
+
+      const allChannels = searchResult.data.items || searchResult.data.data || [];
+
+      // 过滤出该账户的渠道
+      const channels = allChannels.filter(channel => {
+        if (!channel.name) return false;
+        return channel.name === accountEmail || channel.name.includes(accountEmail.split('@')[0]);
+      });
+
+      logger.info(`Found ${channels.length} channels for account ${accountEmail}`);
+
+      const deleted = [];
+      const failed = [];
+
+      // 逐个删除渠道
+      for (const channel of channels) {
+        try {
+          const result = await this.deleteChannel(channel.id);
+          if (result.success) {
+            deleted.push({
+              id: channel.id,
+              name: channel.name
+            });
+          } else {
+            failed.push({
+              id: channel.id,
+              name: channel.name,
+              error: result.message
+            });
+          }
+        } catch (error) {
+          failed.push({
+            id: channel.id,
+            name: channel.name,
+            error: error.message
+          });
+        }
+      }
+
+      logger.info(`Deletion completed for ${accountEmail}: ${deleted.length} deleted, ${failed.length} failed`);
+
+      return {
+        deleted,
+        failed,
+        total: channels.length
+      };
+    } catch (error) {
+      logger.error(`Failed to delete channels for account ${accountEmail}:`, error.message);
+      throw new Error(`批量删除账户渠道失败: ${error.message}`);
     }
   }
 

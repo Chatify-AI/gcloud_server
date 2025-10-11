@@ -14,7 +14,9 @@ router.get('/', async (req, res) => {
       page = 1,
       pageSize = 50,
       search = '',
-      showAll = false
+      showAll = false,
+      createdFrom = '',
+      createdTo = ''
     } = req.query;
 
     const currentPage = parseInt(page);
@@ -22,19 +24,51 @@ router.get('/', async (req, res) => {
 
     // 构建搜索条件
     const whereCondition = { userId: req.userId };
+    const { Op } = require('sequelize');
+
+    // 创建条件数组
+    const conditions = [{ userId: req.userId }];
+
+    // 添加搜索条件
     if (search && search.trim()) {
-      const { Op } = require('sequelize');
       const searchTerm = search.trim();
-      whereCondition[Op.and] = [
-        { userId: req.userId },
-        {
-          [Op.or]: [
-            { email: { [Op.like]: `%${searchTerm}%` } },
-            { projectId: { [Op.like]: `%${searchTerm}%` } },
-            { projectName: { [Op.like]: `%${searchTerm}%` } }
-          ]
+      conditions.push({
+        [Op.or]: [
+          { email: { [Op.like]: `%${searchTerm}%` } },
+          { projectId: { [Op.like]: `%${searchTerm}%` } },
+          { projectName: { [Op.like]: `%${searchTerm}%` } }
+        ]
+      });
+    }
+
+    // 添加创建时间筛选条件
+    if (createdFrom || createdTo) {
+      const dateCondition = {};
+
+      if (createdFrom) {
+        const fromDate = new Date(createdFrom);
+        if (!isNaN(fromDate.getTime())) {
+          dateCondition[Op.gte] = fromDate;
         }
-      ];
+      }
+
+      if (createdTo) {
+        const toDate = new Date(createdTo);
+        if (!isNaN(toDate.getTime())) {
+          // 将结束日期设置为当天的23:59:59
+          toDate.setHours(23, 59, 59, 999);
+          dateCondition[Op.lte] = toDate;
+        }
+      }
+
+      if (Object.keys(dateCondition).length > 0) {
+        conditions.push({ createdAt: dateCondition });
+      }
+    }
+
+    // 如果有多个条件，使用 Op.and 合并
+    if (conditions.length > 1) {
+      whereCondition[Op.and] = conditions;
       delete whereCondition.userId; // 避免重复条件
     }
 

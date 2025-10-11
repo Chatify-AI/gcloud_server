@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import AdminLogin from './pages/AdminLogin'
 import Dashboard from './pages/Dashboard'
 import GCloudAccounts from './pages/GCloudAccounts'
+import AccountSummaries from './pages/AccountSummaries'
 import Terminal from './pages/Terminal'
 import History from './pages/History'
 import ApiKeys from './pages/ApiKeys'
@@ -25,6 +26,7 @@ function App() {
           <Route index element={<Navigate to="/dashboard" />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="accounts" element={<GCloudAccounts />} />
+          <Route path="account-summaries" element={<AccountSummaries />} />
           <Route path="terminal" element={<Terminal />} />
           <Route path="history" element={<History />} />
           <Route path="apikeys" element={<ApiKeys />} />

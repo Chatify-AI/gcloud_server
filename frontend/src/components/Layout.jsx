@@ -26,7 +26,8 @@ import {
   Logout as LogoutIcon,
   Key as KeyIcon,
   Hub as HubIcon,
-  Assessment as AssessmentIcon
+  Assessment as AssessmentIcon,
+  TableView as TableViewIcon
 } from '@mui/icons-material'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -35,6 +36,7 @@ const drawerWidth = 240
 const menuItems = [
   { text: '控制台', icon: <DashboardIcon />, path: '/dashboard' },
   { text: 'GCloud 账户', icon: <AccountCircleIcon />, path: '/accounts' },
+  { text: '账户汇总', icon: <TableViewIcon />, path: '/account-summaries' },
   { text: '终端', icon: <TerminalIcon />, path: '/terminal' },
   { text: '历史记录', icon: <HistoryIcon />, path: '/history' },
   { text: 'API 密钥', icon: <KeyIcon />, path: '/apikeys' },
