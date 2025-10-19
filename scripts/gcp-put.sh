@@ -1,8 +1,8 @@
 #!/bin/bash
 # GCP Gemini API 智能密钥管理工具
 # 智能管理项目：根据现有项目情况决定改名或新建，确保3个gemini项目用于生成API密钥
-# 流程: 删除所有项目 → 智能项目管理 → 关联账单 → 生成Gemini密钥 → 上传FTP
-# 版本: 3.5.0 - 删除项目版，自动解绑账单并清理资源
+# 流程: 取消账单关联 → 智能项目管理 → 关联账单 → 生成Gemini密钥 → 上传FTP
+# 版本: 3.4.0 - 配额测试项目复用版，避免浪费项目配额
 
 # 仅启用 errtrace (-E) 与 nounset (-u)
 set -Euo pipefail
@@ -19,8 +19,8 @@ BOLD='\033[1m'
 
 # ===== 全局配置 =====
 # 版本信息
-VERSION="3.5.1"
-LAST_UPDATED="2025-10-18"
+VERSION="3.4.0"
+LAST_UPDATED="2025-08-25"
 
 # Gemini项目前缀词库
 GEMINI_PREFIX_WORDS=(
@@ -614,90 +614,86 @@ check_env() {
     log "SUCCESS" "环境检查通过 (账号: ${active_account})"
 }
 
-# ===== 以下函数在删除项目版本中已不再使用，保留供参考 =====
+# 修复：检查项目名称是否是Gemini项目（以Gemini开头，不区分大小写）
+is_gemini_project() {
+    local project_name="$1"
+    # 转换为小写进行比较，支持 Gemini、gemini、GEMINI 等格式
+    local lowercase_name
+    lowercase_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]')
+    [[ "$lowercase_name" =~ ^gemini.* ]]
+}
 
-# 已废弃：检查项目名称是否是Gemini项目（以Gemini开头，不区分大小写）
-# 删除项目版本不需要此函数
-# is_gemini_project() {
-#     local project_name="$1"
-#     local lowercase_name
-#     lowercase_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]')
-#     [[ "$lowercase_name" =~ ^gemini.* ]]
-# }
+# 修复：获取所有项目信息（包含项目ID和名称）
+get_all_projects() {
+    # 获取项目ID和名称的映射，格式为: "project_id,project_name"
+    local projects
+    projects=$(gcloud projects list --format='csv[no-heading](projectId,name)' --filter='lifecycleState:ACTIVE' 2>/dev/null || echo "")
+    echo "$projects"
+}
 
-# 已废弃：获取所有项目信息（包含项目ID和名称）
-# 删除项目版本不需要此函数
-# get_all_projects() {
-#     local projects
-#     projects=$(gcloud projects list --format='csv[no-heading](projectId,name)' --filter='lifecycleState:ACTIVE' 2>/dev/null || echo "")
-#     echo "$projects"
-# }
+# 修复：分类项目（根据项目名称而不是ID）
+categorize_projects() {
+    local all_projects="$1"
+    local gemini_projects=()
+    local other_projects=()
+    
+    while IFS=',' read -r project_id project_name; do
+        if [ -n "$project_id" ] && [ -n "$project_name" ]; then
+            # 去除可能的引号
+            project_id=$(echo "$project_id" | sed 's/^"//;s/"$//')
+            project_name=$(echo "$project_name" | sed 's/^"//;s/"$//')
+            
+            # 根据项目名称判断是否为Gemini项目
+            if is_gemini_project "$project_name"; then
+                gemini_projects+=("$project_id")
+            else
+                other_projects+=("$project_id")
+            fi
+        fi
+    done <<< "$all_projects"
+    
+    echo "GEMINI_COUNT:${#gemini_projects[@]}"
+    echo "OTHER_COUNT:${#other_projects[@]}"
+    for project in "${gemini_projects[@]}"; do
+        echo "GEMINI:$project"
+    done
+    for project in "${other_projects[@]}"; do
+        echo "OTHER:$project"
+    done
+}
 
-# 已废弃：分类项目（根据项目名称而不是ID）
-# 删除项目版本不需要此函数
-# categorize_projects() {
-#     local all_projects="$1"
-#     local gemini_projects=()
-#     local other_projects=()
-#
-#     while IFS=',' read -r project_id project_name; do
-#         if [ -n "$project_id" ] && [ -n "$project_name" ]; then
-#             project_id=$(echo "$project_id" | sed 's/^"//;s/"$//')
-#             project_name=$(echo "$project_name" | sed 's/^"//;s/"$//')
-#
-#             if is_gemini_project "$project_name"; then
-#                 gemini_projects+=("$project_id")
-#             else
-#                 other_projects+=("$project_id")
-#             fi
-#         fi
-#     done <<< "$all_projects"
-#
-#     echo "GEMINI_COUNT:${#gemini_projects[@]}"
-#     echo "OTHER_COUNT:${#other_projects[@]}"
-#     for project in "${gemini_projects[@]}"; do
-#         echo "GEMINI:$project"
-#     done
-#     for project in "${other_projects[@]}"; do
-#         echo "OTHER:$project"
-#     done
-# }
+# 获取项目的当前名称
+get_project_name() {
+    local project_id="$1"
+    local project_name
+    project_name=$(gcloud projects describe "$project_id" --format='value(name)' 2>/dev/null || echo "")
+    echo "$project_name"
+}
 
-# 已废弃：获取项目的当前名称
-# 删除项目版本中,项目名称在创建时已知,无需重新获取
-# get_project_name() {
-#     local project_id="$1"
-#     local project_name
-#     project_name=$(gcloud projects describe "$project_id" --format='value(name)' 2>/dev/null || echo "")
-#     echo "$project_name"
-# }
+# 重命名项目
+rename_project() {
+    local project_id="$1"
+    local new_name="$2"
+    
+    # 获取当前项目名称用于日志
+    local current_name
+    current_name=$(get_project_name "$project_id")
+    
+    log "INFO" "重命名项目 ${project_id} (${current_name}) -> ${new_name}"
+    
+    if retry_silent gcloud projects update "$project_id" --name="$new_name" --quiet; then
+        log "SUCCESS" "项目重命名成功: ${project_id} -> ${new_name}"
+        return 0
+    else
+        log "ERROR" "项目重命名失败: ${project_id}"
+        return 1
+    fi
+}
 
-# 已废弃：重命名项目
-# 删除项目版本不需要重命名,直接删除后重建
-# rename_project() {
-#     local project_id="$1"
-#     local new_name="$2"
-#
-#     local current_name
-#     current_name=$(get_project_name "$project_id")
-#
-#     log "INFO" "重命名项目 ${project_id} (${current_name}) -> ${new_name}"
-#
-#     if retry_silent gcloud projects update "$project_id" --name="$new_name" --quiet; then
-#         log "SUCCESS" "项目重命名成功: ${project_id} -> ${new_name}"
-#         return 0
-#     else
-#         log "ERROR" "项目重命名失败: ${project_id}"
-#         return 1
-#     fi
-# }
-
-# ===== 以上为废弃函数 =====
-
-# 改进版：检查项目配额并保留测试项目（返回项目ID和名称）
+# 改进版：检查项目配额并保留测试项目
 check_and_create_quota_test_project() {
     log "INFO" "检查项目创建配额..."
-
+    
     # 生成测试项目信息
     local project_prefix
     project_prefix=$(generate_random_gemini_prefix)
@@ -705,25 +701,15 @@ check_and_create_quota_test_project() {
     suffix=$(unique_suffix)
     local test_project_id="${project_prefix}-${suffix}"
     local test_project_name="Gemini-API-$(generate_random_4digits)"
-
-    log "INFO" "尝试创建测试项目: ${test_project_id} (${test_project_name})"
-
+    
+    log "INFO" "尝试创建测试项目: ${test_project_id}"
+    
     # 执行项目创建命令并捕获错误
     local create_output
     create_output=$(gcloud projects create "$test_project_id" --name="$test_project_name" --quiet 2>&1) || {
         # 分析错误信息
         if echo "$create_output" | grep -qi "quota\|limit\|exceeded"; then
             log "WARN" "项目配额已满，无法创建新项目"
-
-            # 检查是否有处于删除状态的项目占用配额
-            local deleting_projects
-            deleting_projects=$(gcloud projects list --filter='lifecycleState:DELETE_REQUESTED' --format='value(projectId)' 2>/dev/null | wc -l)
-
-            if [ "$deleting_projects" -gt 0 ]; then
-                log "INFO" "发现 ${deleting_projects} 个项目正在删除中，占用配额"
-                log "INFO" "这些项目会在30天后自动释放配额"
-            fi
-
             QUOTA_TEST_PROJECT=""
             return 1
         else
@@ -732,38 +718,35 @@ check_and_create_quota_test_project() {
             return 1
         fi
     }
-
+    
     # 项目创建成功，保留它作为Gemini项目使用
-    log "SUCCESS" "配额检查通过，测试项目创建成功: ${test_project_id} (${test_project_name})"
+    log "SUCCESS" "配额检查通过，测试项目创建成功: ${test_project_id}"
     log "INFO" "将保留此项目作为Gemini项目使用，避免配额浪费"
-
-    # 保存项目ID和名称（格式: ID:NAME）
-    QUOTA_TEST_PROJECT="${test_project_id}:${test_project_name}"
-
+    QUOTA_TEST_PROJECT="$test_project_id"
+    
     return 0
 }
 
-# 修复：创建新的Gemini项目并写入文件（返回项目ID和名称）
+# 修复：创建新的Gemini项目并写入文件（增加配额检查）
 create_gemini_project_to_file() {
     local output_file="$1"
     local project_prefix suffix project_id project_name
-
+    
     project_prefix=$(generate_random_gemini_prefix)
-    suffix=$(unique_suffix)
+    suffix=$(unique_suffix)  
     project_id="${project_prefix}-${suffix}"
     project_name="Gemini-API-$(generate_random_4digits)"
-
+    
     log "INFO" "尝试创建新Gemini项目: ${project_id} (${project_name})"
-
+    
     # 执行项目创建并捕获详细错误信息
     local create_output create_exit_code
     create_output=$(gcloud projects create "$project_id" --name="$project_name" --quiet 2>&1)
     create_exit_code=$?
-
+    
     if [ $create_exit_code -eq 0 ]; then
-        log "SUCCESS" "Gemini项目创建成功: ${project_id} (${project_name})"
-        # 写入格式: ID:NAME
-        printf "%s:%s" "$project_id" "$project_name" > "$output_file"
+        log "SUCCESS" "Gemini项目创建成功: ${project_id}"
+        printf "%s" "$project_id" > "$output_file"
         return 0
     else
         # 分析错误原因
@@ -1022,149 +1005,278 @@ get_billing_account_auto() {
     return 0
 }
 
-# 删除所有活跃项目（自动解绑账单）
-delete_all_projects() {
-    log "INFO" "====== 第1步: 删除所有现有活跃项目 ======"
-
+# 取消所有项目的账单关联
+unlink_all_billing_silent() {
+    log "INFO" "====== 第1步: 取消所有现有项目的账单关联 ======"
+    
     # 获取所有活跃项目（只需要项目ID）
     local all_project_ids
     all_project_ids=$(gcloud projects list --format='value(projectId)' --filter='lifecycleState:ACTIVE' 2>/dev/null || echo "")
-
+    
     if [ -z "$all_project_ids" ]; then
         log "INFO" "未找到任何活跃项目"
         return 0
     fi
-
-    # 将项目ID转换为数组
-    local projects_to_delete=()
+    
+    # 筛选有账单关联的项目
+    local billing_projects=()
+    local total_checked=0
+    
+    log "INFO" "检查项目账单关联状态..."
     while IFS= read -r project_id; do
         if [ -n "$project_id" ]; then
-            projects_to_delete+=("$project_id")
+            total_checked=$((total_checked + 1))
+            printf "\r正在检查项目 %d: %s" "$total_checked" "$project_id" >&2
+            
+            local billing_info
+            billing_info=$(gcloud billing projects describe "$project_id" --format='value(billingAccountName)' 2>/dev/null || echo "")
+            
+            if [ -n "$billing_info" ]; then
+                billing_projects+=("$project_id")
+            fi
         fi
     done <<< "$all_project_ids"
-
-    local total=${#projects_to_delete[@]}
-    log "INFO" "找到 ${total} 个活跃项目需要删除"
-
+    
+    echo >&2 # 换行
+    
+    local total=${#billing_projects[@]}
+    log "INFO" "找到 ${total} 个关联了账单的项目"
+    
     if [ "$total" -eq 0 ]; then
-        log "INFO" "没有需要删除的项目"
+        log "INFO" "没有需要取消账单关联的项目"
         return 0
     fi
-
-    log "INFO" "开始删除项目（删除项目会自动解绑账单）..."
-
+    
+    log "INFO" "开始取消账单关联..."
+    
     local success=0
     local failed=0
     local current=0
-
-    for project_id in "${projects_to_delete[@]}"; do
+    
+    for project_id in "${billing_projects[@]}"; do
         current=$((current + 1))
-        log "INFO" "[${current}/${total}] 删除项目: ${project_id}"
-
-        # 使用 gcloud projects delete 删除项目
-        if gcloud projects delete "$project_id" --quiet 2>/dev/null; then
-            # 验证项目状态是否变为 DELETE_REQUESTED
-            sleep 2
-            local project_state
-            project_state=$(gcloud projects describe "$project_id" --format='value(lifecycleState)' 2>/dev/null || echo "DELETED")
-
-            if [[ "$project_state" == "DELETE_REQUESTED" || "$project_state" == "DELETED" ]]; then
-                log "SUCCESS" "成功删除项目: ${project_id} (状态: ${project_state})"
-                success=$((success + 1))
-            else
-                log "WARN" "项目删除命令成功,但状态异常: ${project_id} (状态: ${project_state})"
-                success=$((success + 1))
-            fi
+        log "INFO" "[${current}/${total}] 取消项目账单关联: ${project_id}"
+        
+        if gcloud billing projects unlink "$project_id" --quiet 2>/dev/null; then
+            log "SUCCESS" "成功取消账单关联: ${project_id}"
+            success=$((success + 1))
         else
-            log "ERROR" "删除项目失败: ${project_id}"
+            log "ERROR" "取消账单关联失败: ${project_id}"
             failed=$((failed + 1))
         fi
-
+        
         show_progress "$current" "$total"
-        sleep 1  # 增加延迟避免API限流
+        sleep 0.5
     done
-
+    
     echo >&2
-    log "INFO" "项目删除完成 - 成功: ${success}, 失败: ${failed}"
-    log "INFO" "注意: 删除的项目有30天恢复期，期间仍占用配额"
-
-    # 等待删除操作生效
-    log "INFO" "等待删除操作生效..."
+    log "INFO" "账单关联取消完成 - 成功: ${success}, 失败: ${failed}"
+    
+    # 等待账单变更生效
+    log "INFO" "等待账单变更生效..."
     sleep 5
-
+    
     return 0
 }
 
-# 改进：智能项目管理主函数（删除项目版 - 从零开始）
+# 改进：智能项目管理主函数（配额测试项目复用版）
 smart_project_management() {
-    log "INFO" "====== 第2步: 智能项目管理（从零开始创建） ======"
-
-    log "INFO" "由于第1步已删除所有项目，现在从零开始创建新项目"
-
-    # 目标Gemini项目列表（格式: ID:NAME）
+    log "INFO" "====== 第2步: 智能项目管理（配额测试项目复用版） ======"
+    
+    # 获取所有项目（包含ID和名称）
+    local all_projects
+    all_projects=$(get_all_projects)
+    
+    # 分类项目（基于项目名称）
+    local project_info
+    project_info=$(categorize_projects "$all_projects")
+    
+    local gemini_count=0
+    local other_count=0
+    local gemini_projects=()
+    local other_projects=()
+    
+    while IFS= read -r line; do
+        if [[ "$line" == GEMINI_COUNT:* ]]; then
+            gemini_count=${line#GEMINI_COUNT:}
+        elif [[ "$line" == OTHER_COUNT:* ]]; then
+            other_count=${line#OTHER_COUNT:}
+        elif [[ "$line" == GEMINI:* ]]; then
+            gemini_projects+=("${line#GEMINI:}")
+        elif [[ "$line" == OTHER:* ]]; then
+            other_projects+=("${line#OTHER:}")
+        fi
+    done <<< "$project_info"
+    
+    log "INFO" "项目统计: Gemini项目 ${gemini_count} 个, 其他项目 ${other_count} 个"
+    
+    # 新功能：将现有的Gemini项目重命名为已使用状态
+    if [ ${#gemini_projects[@]} -gt 0 ]; then
+        log "INFO" "====== 将现有Gemini项目标记为已使用 ======"
+        log "INFO" "发现 ${#gemini_projects[@]} 个现有Gemini项目，将重命名为 gemini-yiyong-xxxx 格式"
+        
+        local renamed_count=0
+        for project_id in "${gemini_projects[@]}"; do
+            local current_name
+            current_name=$(get_project_name "$project_id")
+            local new_yiyong_name="gemini-yiyong-$(generate_random_4digits)"
+            
+            log "INFO" "标记已使用项目: ${project_id} (${current_name}) -> ${new_yiyong_name}"
+            
+            if rename_project "$project_id" "$new_yiyong_name"; then
+                renamed_count=$((renamed_count + 1))
+                log "SUCCESS" "项目已标记为已使用: ${project_id}"
+            else
+                log "ERROR" "标记项目失败: ${project_id}"
+            fi
+            
+            # 重命名间隔，避免API限流
+            sleep 2
+        done
+        
+        log "INFO" "完成标记 ${renamed_count} 个项目为已使用状态"
+        
+        # 重新获取和分类项目（因为Gemini项目已被重命名）
+        log "INFO" "重新分类项目..."
+        all_projects=$(get_all_projects)
+        project_info=$(categorize_projects "$all_projects")
+        
+        # 重新解析项目分类
+        gemini_count=0
+        other_count=0
+        gemini_projects=()
+        other_projects=()
+        
+        while IFS= read -r line; do
+            if [[ "$line" == GEMINI_COUNT:* ]]; then
+                gemini_count=${line#GEMINI_COUNT:}
+            elif [[ "$line" == OTHER_COUNT:* ]]; then
+                other_count=${line#OTHER_COUNT:}
+            elif [[ "$line" == GEMINI:* ]]; then
+                gemini_projects+=("${line#GEMINI:}")
+            elif [[ "$line" == OTHER:* ]]; then
+                other_projects+=("${line#OTHER:}")
+            fi
+        done <<< "$project_info"
+        
+        log "INFO" "重新分类后统计: Gemini项目 ${gemini_count} 个, 其他项目 ${other_count} 个"
+    fi
+    
+    # 显示详细的项目分类信息
+    if [ ${#gemini_projects[@]} -gt 0 ]; then
+        log "INFO" "当前Gemini项目（新的）:"
+        for project_id in "${gemini_projects[@]}"; do
+            local project_name
+            project_name=$(get_project_name "$project_id")
+            log "INFO" "  - ${project_id} (${project_name})"
+        done
+    fi
+    
+    if [ ${#other_projects[@]} -gt 0 ]; then
+        log "INFO" "其他项目（包括已使用的gemini-yiyong项目）:"
+        for project_id in "${other_projects[@]}"; do
+            local project_name
+            project_name=$(get_project_name "$project_id")
+            # 特别标记已使用的项目
+            if [[ "$project_name" =~ ^gemini-yiyong-.* ]]; then
+                log "INFO" "  - ${project_id} (${project_name}) [已使用]"
+            else
+                log "INFO" "  - ${project_id} (${project_name})"
+            fi
+        done
+    fi
+    
+    # 目标Gemini项目列表
     local target_gemini_projects=()
-
-    # 智能分析策略（删除项目版 - 纯创建模式）
-    log "INFO" "====== 智能项目创建策略（纯创建模式） ======"
-
+    
+    # 新增：智能分析策略（配额测试项目复用版）
+    log "INFO" "====== 智能分析最佳策略（配额测试项目复用版） ======"
+    
     # 首先检查配额并创建测试项目（如果成功则保留使用）
     local can_create_new=false
     if check_and_create_quota_test_project; then
         can_create_new=true
         if [ -n "$QUOTA_TEST_PROJECT" ]; then
-            # QUOTA_TEST_PROJECT 格式: ID:NAME
-            local test_id="${QUOTA_TEST_PROJECT%%:*}"
-            local test_name="${QUOTA_TEST_PROJECT#*:}"
-            log "SUCCESS" "配额测试项目已创建并保留: ${test_id} (${test_name})"
+            log "SUCCESS" "配额测试项目已创建并保留: ${QUOTA_TEST_PROJECT}"
             # 将测试项目加入目标列表
             target_gemini_projects+=("$QUOTA_TEST_PROJECT")
         fi
     else
         can_create_new=false
-        log "ERROR" "项目配额已满，无法创建新项目"
-        return 1
+        log "WARN" "项目配额已满，将仅处理现有项目"
     fi
-
+    
     # 计算还需要多少个项目
     local current_count=${#target_gemini_projects[@]}
     local needed=$((3 - current_count))
-
+    
     log "INFO" "当前已有 ${current_count} 个Gemini项目，还需要 ${needed} 个"
-
-    # 继续创建新项目直到达到目标数量
+    
+    # 计算可用于重命名的项目数量
+    local available_for_rename=${#other_projects[@]}
+    log "INFO" "可用于重命名的其他项目: ${available_for_rename} 个"
+    
+    # 优先重命名现有项目
+    if [ "$needed" -gt 0 ] && [ "$available_for_rename" -gt 0 ]; then
+        local rename_count=$needed
+        if [ "$rename_count" -gt "$available_for_rename" ]; then
+            rename_count=$available_for_rename
+        fi
+        
+        log "INFO" "将重命名 ${rename_count} 个现有项目为Gemini项目"
+        
+        for i in $(seq 0 $((rename_count - 1))); do
+            if [ $i -lt ${#other_projects[@]} ]; then
+                local project_id="${other_projects[$i]}"
+                local new_name="Gemini-API-$(generate_random_4digits)"
+                
+                if rename_project "$project_id" "$new_name"; then
+                    target_gemini_projects+=("$project_id")
+                    log "SUCCESS" "重命名成功: ${project_id} -> ${new_name}"
+                else
+                    log "ERROR" "重命名项目失败: $project_id"
+                fi
+                
+                sleep 2
+            fi
+        done
+        
+        # 更新需要的数量
+        current_count=${#target_gemini_projects[@]}
+        needed=$((3 - current_count))
+    fi
+    
+    # 如果还需要更多项目且可以创建新项目
     if [ "$needed" -gt 0 ] && [ "$can_create_new" = true ]; then
         log "INFO" "尝试创建 ${needed} 个新项目以达到目标数量"
-
+        
         for attempt in $(seq 1 $needed); do
             local temp_project_file="${TEMP_DIR}/new_project_${attempt}.txt"
-
+            
             if create_gemini_project_to_file "$temp_project_file"; then
-                local new_project_info
-                new_project_info=$(cat "$temp_project_file" 2>/dev/null | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-                # 验证格式 ID:NAME
-                if [ -n "$new_project_info" ] && [[ "$new_project_info" =~ ^[a-z][a-z0-9-]{5,29}:.+ ]]; then
-                    target_gemini_projects+=("$new_project_info")
-                    local proj_id="${new_project_info%%:*}"
-                    local proj_name="${new_project_info#*:}"
-                    log "SUCCESS" "创建新项目: ${proj_id} (${proj_name})"
+                local new_project
+                new_project=$(cat "$temp_project_file" 2>/dev/null | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                
+                if [ -n "$new_project" ] && [[ "$new_project" =~ ^[a-z][a-z0-9-]{5,29}$ ]]; then
+                    target_gemini_projects+=("$new_project")
+                    log "SUCCESS" "创建新项目: $new_project"
                 fi
             else
                 log "WARN" "创建新项目失败（第${attempt}次尝试）"
                 # 如果创建失败，可能是配额用完了
                 break
             fi
-
+            
             rm -f "$temp_project_file" 2>/dev/null || true
             sleep 3
         done
     fi
-
+    
     # 最终结果评估
     local final_count=${#target_gemini_projects[@]}
-
+    
     log "INFO" "====== 项目管理结果评估 ======"
-
+    
     if [ "$final_count" -eq 0 ]; then
         log "ERROR" "未能准备任何Gemini项目，流程无法继续"
         return 1
@@ -1179,28 +1291,22 @@ smart_project_management() {
     else
         log "SUCCESS" "超额完成！准备了 ${final_count} 个Gemini项目"
     fi
-
+    
     log "INFO" "将配置以下 ${final_count} 个Gemini项目:"
     for i in "${!target_gemini_projects[@]}"; do
-        local project_info="${target_gemini_projects[$i]}"
-        local project_id="${project_info%%:*}"
-        local project_name="${project_info#*:}"
-
-        # 检查是否是配额测试项目
-        if [ "$project_info" = "$QUOTA_TEST_PROJECT" ]; then
-            log "INFO" "  $((i+1)). ${project_id} (${project_name}) [配额测试项目复用]"
+        local project_id="${target_gemini_projects[$i]}"
+        local project_name
+        project_name=$(get_project_name "$project_id")
+        if [ "$project_id" = "$QUOTA_TEST_PROJECT" ]; then
+            log "INFO" "  ${i}. ${project_id} (${project_name}) [配额测试项目复用]"
         else
-            log "INFO" "  $((i+1)). ${project_id} (${project_name})"
+            log "INFO" "  ${i}. ${project_id} (${project_name})"
         fi
     done
-
-    # 将目标项目保存到全局变量（只保存项目ID）
-    FINAL_GEMINI_PROJECTS=()
-    for project_info in "${target_gemini_projects[@]}"; do
-        local project_id="${project_info%%:*}"
-        FINAL_GEMINI_PROJECTS+=("$project_id")
-    done
-
+    
+    # 将目标项目保存到全局变量
+    FINAL_GEMINI_PROJECTS=("${target_gemini_projects[@]}")
+    
     return 0
 }
 
@@ -1428,8 +1534,6 @@ upload_keys_to_ftp() {
     local current=0
     local total=${#matched_files[@]}
 
-    local failed_files=()
-
     for file in "${matched_files[@]}"; do
         current=$((current + 1))
         local filename=$(basename "$file")
@@ -1439,7 +1543,6 @@ upload_keys_to_ftp() {
             uploaded=$((uploaded + 1))
         else
             failed=$((failed + 1))
-            failed_files+=("$file")
         fi
 
         show_progress "$current" "$total"
@@ -1448,19 +1551,6 @@ upload_keys_to_ftp() {
 
     echo >&2
     log "INFO" "密钥上传完成 - 成功: ${uploaded}, 失败: ${failed}"
-
-    # 如果有失败的文件，输出详细信息供本地服务器下载
-    if [ "$failed" -gt 0 ]; then
-        log "WARN" "检测到FTP上传失败，输出文件路径供远程下载"
-        log "INFO" "=== DOWNLOAD_INFO_START ==="
-        log "INFO" "KEYS_DIR=${KEY_DIR}"
-        log "INFO" "FAILED_COUNT=${failed}"
-        for file in "${failed_files[@]}"; do
-            local rel_path="${file#$KEY_DIR/}"
-            log "INFO" "FAILED_FILE=${rel_path}"
-        done
-        log "INFO" "=== DOWNLOAD_INFO_END ==="
-    fi
 
     return 0
 }
@@ -1532,9 +1622,9 @@ run_gemini_automation() {
     user_email=$(get_current_user_email) || return 1
     log "INFO" "当前用户: ${user_email}"
 
-    # 第1步: 删除所有现有活跃项目
-    if ! delete_all_projects; then
-        log "ERROR" "删除项目失败"
+    # 第1步: 取消所有现有项目的账单关联
+    if ! unlink_all_billing_silent; then
+        log "ERROR" "取消账单关联失败"
         return 1
     fi
 
@@ -1613,8 +1703,8 @@ main() {
     echo "╔═══════════════════════════════════════════════════════╗" >&2
     echo "║         GCP Gemini API 智能密钥管理工具 v${VERSION}         ║" >&2
     echo "║                                                       ║" >&2
-    echo "║          🗑️  删除项目 + 配额测试项目复用 🗑️              ║" >&2
-    echo "║              🎯 自动解绑账单，彻底清理 🎯               ║" >&2
+    echo "║          🧠 智能项目管理 + 配额测试项目复用 🧠           ║" >&2
+    echo "║              🎯 避免配额浪费，提高效率 🎯               ║" >&2
     echo "║          🔧 测试项目直接保留使用 🔧                      ║" >&2
     echo "╚═══════════════════════════════════════════════════════╝" >&2
     echo -e "${NC}" >&2
@@ -1630,21 +1720,24 @@ main() {
     check_env
 
     # 显示配置信息
-    echo -e "\n${YELLOW}智能管理策略 (删除项目版):${NC}" >&2
-    echo "1. 删除所有现有活跃项目（自动解绑账单）" >&2
-    echo "2. 智能配额检测与项目创建:" >&2
+    echo -e "\n${YELLOW}智能管理策略 (配额测试项目复用版):${NC}" >&2
+    echo "1. 优先取消所有项目账单关联" >&2
+    echo "2. 将现有Gemini项目标记为已使用：" >&2
+    echo "   - 现有 Gemini-xxx 项目 → gemini-yiyong-xxxx (已使用标记)" >&2
+    echo "3. 智能配额检测与项目复用:" >&2
     echo "   - 创建测试项目检查配额 → 成功则保留作为Gemini项目使用 ✨" >&2
     echo "   - 配额允许时 → 继续创建新项目达到3个" >&2
-    echo "3. 避免配额浪费：测试项目永不删除，直接复用" >&2
-    echo "4. 为所有成功准备的项目生成API密钥并上传" >&2
+    echo "   - 配额已满时 → 重命名现有项目为Gemini项目" >&2
+    echo "4. 避免配额浪费：测试项目永不删除，直接复用" >&2
+    echo "5. 为所有成功准备的项目生成API密钥并上传" >&2
     echo >&2
-    echo -e "${YELLOW}更新内容 v3.5.1 (全面优化版):${NC}" >&2
-    echo "- 🐛 修复：项目创建后立即获取名称可能失败的问题" >&2
-    echo "- ✨ 优化：项目创建函数返回ID和名称，避免重复查询" >&2
-    echo "- ✅ 增强：删除项目后验证状态（DELETE_REQUESTED）" >&2
-    echo "- 📊 改进：配额满时显示正在删除的项目数量" >&2
-    echo "- 🧹 清理：注释废弃的辅助函数（项目分类/重命名等）" >&2
-    echo "- 🎯 稳定：消除所有逻辑bug，提高流程可靠性" >&2
+    echo -e "${YELLOW}更新内容 v3.4.0:${NC}" >&2
+    echo "- 🚀 新增：配额测试项目复用机制" >&2
+    echo "- ✨ 改进：测试项目创建成功后保留使用，避免配额浪费" >&2
+    echo "- 🎯 优化：将测试项目作为第一个Gemini项目使用" >&2
+    echo "- 💡 增强：更智能的配额管理策略" >&2
+    echo "- ✅ 修复：删除测试项目造成的配额浪费问题" >&2
+    echo "- 📋 改进：更清晰的项目来源标识" >&2
     echo >&2
     echo -e "${YELLOW}当前配置:${NC}" >&2
     echo "- 目标Gemini项目数: ${TARGET_GEMINI_PROJECTS} (理想)" >&2
@@ -1660,13 +1753,12 @@ main() {
     fi
     echo "- 密钥文件命名: 邮箱.txt (汇总所有Gemini密钥)" >&2
     echo >&2
-    echo -e "${GREEN}项目删除与复用特性:${NC}" >&2
-    echo "- 🗑️  第一步直接删除所有活跃项目" >&2
-    echo "- 🔓 删除项目自动解绑账单，无需手动操作" >&2
+    echo -e "${GREEN}配额测试项目复用特性:${NC}" >&2
     echo "- 🔍 创建测试项目检查配额状态" >&2
-    echo "- ♻️  测试项目创建成功后直接保留使用" >&2
+    echo "- ♻️ 测试项目创建成功后直接保留使用" >&2
     echo "- 🎯 避免删除测试项目造成的30天配额占用" >&2
-    echo "- ⚠️  注意：删除的项目有30天恢复期，期间占用配额" >&2
+    echo "- 📊 提高项目配额利用率" >&2
+    echo "- ✨ 更环保的资源管理方式" >&2
     echo >&2
 
     # 执行自动化流程
@@ -1681,5 +1773,4 @@ main() {
 
 # 运行主程序
 main "$@"
-
 
