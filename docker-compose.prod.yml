@@ -73,9 +73,7 @@ services:
   # 主应用服务
   # ========================================
   main-service:
-    build:
-      context: .
-      dockerfile: docker-prod/main/Dockerfile
+    image: luzhipeng728/gcloud-main-service:v3.6.0
     container_name: gcloud-main
     restart: unless-stopped
     depends_on:
@@ -141,9 +139,7 @@ services:
   # 统计服务
   # ========================================
   stats-service:
-    build:
-      context: .
-      dockerfile: docker-prod/stats/Dockerfile
+    image: luzhipeng728/gcloud-stats-service:v3.6.0
     container_name: gcloud-stats
     restart: unless-stopped
     depends_on:
@@ -191,9 +187,7 @@ services:
   # 执行器服务
   # ========================================
   executor-service:
-    build:
-      context: .
-      dockerfile: docker-prod/executor/Dockerfile
+    image: luzhipeng728/gcloud-executor-service:v3.6.0
     container_name: gcloud-executor
     restart: unless-stopped
     depends_on:
@@ -249,9 +243,7 @@ services:
   # FTP 服务器
   # ========================================
   ftp-service:
-    build:
-      context: .
-      dockerfile: docker-prod/ftp/Dockerfile
+    image: luzhipeng728/gcloud-ftp-service:v3.6.0
     container_name: gcloud-ftp
     restart: unless-stopped
     environment:
