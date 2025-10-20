@@ -72,6 +72,9 @@ const GCloudAccount = sequelize.define('GCloudAccount', {
     allowNull: true,
     comment: 'Last time this account was monitored'
   }
+}, {
+  tableName: 'g_cloud_accounts',
+  timestamps: true
 });
 
 module.exports = GCloudAccount;
