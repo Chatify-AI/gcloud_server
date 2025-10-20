@@ -83,7 +83,7 @@ services:
       interval: 5s
 
   main-service:
-    image: luzhipeng728/gcloud-main-service:v3.6.1-fix
+    image: luzhipeng728/gcloud-main-service:v3.6.1-fix2
     container_name: gcloud-main
     restart: unless-stopped
     depends_on:
