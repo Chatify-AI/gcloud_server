@@ -1,0 +1,274 @@
+version: '3.8'
+
+services:
+  # ========================================
+  # 配置初始化容器
+  # ========================================
+  config-init:
+    image: alpine:latest
+    container_name: gcloud-config-init
+    command: >
+      sh -c "
+      echo '=== 下载配置文件 ===' &&
+      apk add --no-cache wget &&
+      mkdir -p /config/mysql/init-scripts /config/nginx &&
+      wget -O /config/mysql/init-scripts/01-init.sql https://raw.githubusercontent.com/Chatify-AI/gcloud_server/v3.6.1/deploy/mysql/init-scripts/01-init.sql &&
+      wget -O /config/nginx/nginx.conf https://raw.githubusercontent.com/Chatify-AI/gcloud_server/v3.6.1/deploy/nginx/nginx.conf &&
+      echo '=== 配置文件下载完成 ===' &&
+      touch /config/.ready
+      "
+    volumes:
+      - config_files:/config
+
+  # ========================================
+  # MySQL 数据库
+  # ========================================
+  mysql-service:
+    image: mysql:8.0
+    container_name: gcloud-mysql
+    restart: unless-stopped
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: gcloud
+      MYSQL_USER: gcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD:-gcloud123}
+    ports:
+      - "5306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - config_files:/docker-entrypoint-initdb.d:ro
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # ========================================
+  # Redis 缓存
+  # ========================================
+  redis-service:
+    image: redis:7-alpine
+    container_name: gcloud-redis
+    restart: unless-stopped
+    ports:
+      - "5379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gcloud-network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      timeout: 3s
+      retries: 5
+      interval: 5s
+
+  # ========================================
+  # 主应用服务
+  # ========================================
+  main-service:
+    image: luzhipeng728/gcloud-main-service:v3.6.0
+    container_name: gcloud-main
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      redis-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+      REDIS_HOST: redis-service
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-this-in-production}
+      SESSION_SECRET: ${SESSION_SECRET:-your-session-secret-change-this-in-production}
+      GCLOUD_PROJECT: ${GCLOUD_PROJECT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CHANNEL_MONITOR_PATH: /home/ftpusers/chatify/vip
+      EXECUTOR_SERVICE_URL: http://executor-service:3001
+      ONEAPI_BASE_URL: ${ONEAPI_BASE_URL:-http://104.194.9.201:11002}
+      ONEAPI_KEY: ${ONEAPI_KEY:-t0bAXxyETOitEfEWuU37sWSqwJrE}
+      GCLOUD_SCRIPT_URL: ${GCLOUD_SCRIPT_URL:-https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh}
+      GCLOUD_SCRIPT_BACKUP_URL: ${GCLOUD_SCRIPT_BACKUP_URL:-}
+      FTP_HOST: ftp-service
+      FTP_PORT: 21
+      FTP_USERNAME: chatify
+      FTP_PASSWORD: chatify123
+    ports:
+      - "5000:3000"
+    volumes:
+      - gcloud_config:/home/node/.config/gcloud-manager
+      - app_logs:/app/logs
+      - ftp_data:/home/ftpusers/chatify
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+      start_period: 40s
+
+  # ========================================
+  # 统计服务
+  # ========================================
+  stats-service:
+    image: luzhipeng728/gcloud-stats-service:v3.6.0
+    container_name: gcloud-stats
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      main-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      HOST: 0.0.0.0
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "5001:4000"
+    volumes:
+      - stats_logs:/app/logs
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+      start_period: 30s
+
+  # ========================================
+  # 执行器服务
+  # ========================================
+  executor-service:
+    image: luzhipeng728/gcloud-executor-service:v3.6.0
+    container_name: gcloud-executor
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      redis-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOST: 0.0.0.0
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+      REDIS_HOST: redis-service
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      CLOUDSDK_CONFIG: /home/node/.config/gcloud-manager
+      GCLOUD_PROJECT: ${GCLOUD_PROJECT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "5002:3001"
+    volumes:
+      - gcloud_config:/home/node/.config/gcloud-manager
+      - executor_logs:/app/logs
+    networks:
+      - gcloud-network
+    cap_add:
+      - SYS_ADMIN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+      start_period: 30s
+
+  # ========================================
+  # FTP 服务器
+  # ========================================
+  ftp-service:
+    image: luzhipeng728/gcloud-ftp-service:v3.6.0
+    container_name: gcloud-ftp
+    restart: unless-stopped
+    environment:
+      PUBLICHOST: ${FTP_PUBLIC_HOST:-82.197.94.152}
+      FTP_USER_NAME: chatify
+      FTP_USER_PASS: chatify123
+      FTP_USER_HOME: /home/ftpusers/chatify
+    ports:
+      - "5021:21"
+      - "50000-50009:30000-30009"
+    volumes:
+      - ftp_data:/home/ftpusers/chatify
+    networks:
+      - gcloud-network
+
+  # ========================================
+  # Nginx 反向代理
+  # ========================================
+  nginx-proxy:
+    image: nginx:1.25-alpine
+    container_name: gcloud-nginx
+    restart: unless-stopped
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+      main-service:
+        condition: service_started
+      stats-service:
+        condition: service_started
+    ports:
+      - "5080:80"
+      - "5443:443"
+    volumes:
+      - config_files:/etc/nginx/conf.d:ro
+    networks:
+      - gcloud-network
+    command: >
+      sh -c "
+      cp /etc/nginx/conf.d/nginx/nginx.conf /etc/nginx/nginx.conf &&
+      nginx -g 'daemon off;'
+      "
+
+networks:
+  gcloud-network:
+    driver: bridge
+
+volumes:
+  config_files:
+    driver: local
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  gcloud_config:
+    driver: local
+  app_logs:
+    driver: local
+  stats_logs:
+    driver: local
+  executor_logs:
+    driver: local
+  ftp_data:
+    driver: local

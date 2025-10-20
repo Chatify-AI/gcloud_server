@@ -28,9 +28,18 @@ const connectDB = async () => {
     await sequelize.authenticate();
     logger.info('MySQL database connected successfully to Azure');
 
-    // Sync database - alter existing tables if needed
-    await sequelize.sync({ alter: false });
-    logger.info('Database synced');
+    // Sync database - skip AccountSummary as it's managed by SQL init script
+    // and has schema mismatch with the model
+    const models = Object.values(sequelize.models).filter(
+      model => model.name !== 'AccountSummary'
+    );
+
+    for (const model of models) {
+      await model.sync({ alter: false });
+      logger.debug(`Synced model: ${model.name}`);
+    }
+
+    logger.info('Database synced (AccountSummary skipped)');
   } catch (error) {
     logger.error('Unable to connect to the database:', error);
     process.exit(1);

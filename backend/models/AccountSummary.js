@@ -10,7 +10,6 @@ const AccountSummary = sequelize.define('AccountSummary', {
   email: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     comment: '账户邮箱'
   },
   consumptionAmount: {
@@ -41,12 +40,8 @@ const AccountSummary = sequelize.define('AccountSummary', {
 }, {
   tableName: 'account_summaries',
   timestamps: true,
-  indexes: [
-    {
-      unique: true,
-      fields: ['email']
-    }
-  ]
+  // Indexes are defined in SQL init script, don't sync them
+  indexes: []
 });
 
 module.exports = AccountSummary;
