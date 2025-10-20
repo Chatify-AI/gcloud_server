@@ -1,0 +1,228 @@
+# ==========================================
+# GCloud Server v3.6.1 - 一键部署
+# ==========================================
+# 使用方法：
+# 1. 下载此文件
+# 2. 创建 .env 文件，设置密码（或使用默认密码）
+# 3. 运行: docker-compose -f docker-compose.quick.yml up -d
+#
+# 环境变量（在 .env 文件中设置）：
+# DB_PASSWORD=你的数据库密码
+# MYSQL_ROOT_PASSWORD=你的MySQL root密码
+# REDIS_PASSWORD=你的Redis密码
+# JWT_SECRET=64字符随机字符串
+# SESSION_SECRET=64字符随机字符串
+# ==========================================
+
+version: '3.8'
+
+services:
+  # ========================================
+  # 配置初始化容器
+  # ========================================
+  config-init:
+    image: alpine:latest
+    container_name: gcloud-config-init
+    command: >
+      sh -c "
+      echo '=== 下载MySQL初始化脚本 ===' &&
+      apk add --no-cache wget &&
+      mkdir -p /config/mysql/init-scripts &&
+      wget -O /config/mysql/init-scripts/01-init.sql https://raw.githubusercontent.com/Chatify-AI/gcloud_server/v3.6.1/deploy/mysql/init-scripts/01-init.sql &&
+      echo '=== MySQL初始化脚本下载完成 ===' &&
+      ls -lh /config/mysql/init-scripts/ &&
+      touch /config/.ready
+      "
+    volumes:
+      - config_files:/config
+
+  # ========================================
+  # MySQL 数据库
+  # ========================================
+  mysql-service:
+    image: mysql:8.0
+    container_name: gcloud-mysql
+    restart: unless-stopped
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: gcloud
+      MYSQL_USER: gcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD:-gcloud123}
+    ports:
+      - "5306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - config_files:/docker-entrypoint-initdb.d:ro
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 5s
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  redis-service:
+    image: redis:7-alpine
+    container_name: gcloud-redis
+    restart: unless-stopped
+    ports:
+      - "5379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gcloud-network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      timeout: 3s
+      retries: 5
+      interval: 5s
+
+  main-service:
+    image: luzhipeng728/gcloud-main-service:v3.6.0
+    container_name: gcloud-main
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      redis-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+      REDIS_HOST: redis-service
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      JWT_SECRET: ${JWT_SECRET:-CHANGE-THIS-SECRET-IN-PRODUCTION-USE-64-CHARS-MINIMUM}
+      SESSION_SECRET: ${SESSION_SECRET:-CHANGE-THIS-SESSION-SECRET-IN-PRODUCTION-64-CHARS}
+      ONEAPI_BASE_URL: ${ONEAPI_BASE_URL:-http://104.194.9.201:11002}
+      ONEAPI_KEY: ${ONEAPI_KEY:-t0bAXxyETOitEfEWuU37sWSqwJrE}
+      GCLOUD_SCRIPT_URL: ${GCLOUD_SCRIPT_URL:-https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh}
+      GCLOUD_SCRIPT_BACKUP_URL: ${GCLOUD_SCRIPT_BACKUP_URL:-}
+      FTP_HOST: ftp-service
+      FTP_PORT: 21
+      FTP_USERNAME: chatify
+      FTP_PASSWORD: chatify123
+      EXECUTOR_SERVICE_URL: http://executor-service:3001
+      CHANNEL_MONITOR_PATH: /home/ftpusers/chatify/vip
+    ports:
+      - "5000:3000"
+      - "5080:3000"
+    volumes:
+      - gcloud_config:/home/node/.config/gcloud-manager
+      - app_logs:/app/logs
+      - ftp_data:/home/ftpusers/chatify
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+      start_period: 40s
+
+  stats-service:
+    image: luzhipeng728/gcloud-stats-service:v3.6.0
+    container_name: gcloud-stats
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      main-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+    ports:
+      - "5001:4000"
+    volumes:
+      - stats_logs:/app/logs
+    networks:
+      - gcloud-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+
+  executor-service:
+    image: luzhipeng728/gcloud-executor-service:v3.6.0
+    container_name: gcloud-executor
+    restart: unless-stopped
+    depends_on:
+      mysql-service:
+        condition: service_healthy
+      redis-service:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_HOST: mysql-service
+      DB_PORT: 3306
+      DB_NAME: gcloud
+      DB_USER: gcloud
+      DB_PASSWORD: ${DB_PASSWORD:-gcloud123}
+      REDIS_HOST: redis-service
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      CLOUDSDK_CONFIG: /home/node/.config/gcloud-manager
+    ports:
+      - "5002:3001"
+    volumes:
+      - gcloud_config:/home/node/.config/gcloud-manager
+      - executor_logs:/app/logs
+    networks:
+      - gcloud-network
+    cap_add:
+      - SYS_ADMIN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      timeout: 10s
+      retries: 5
+      interval: 15s
+
+  ftp-service:
+    image: luzhipeng728/gcloud-ftp-service:v3.6.0
+    container_name: gcloud-ftp
+    restart: unless-stopped
+    environment:
+      PUBLICHOST: ${FTP_PUBLIC_HOST:-your-server-ip}
+      FTP_USER_NAME: chatify
+      FTP_USER_PASS: chatify123
+      FTP_USER_HOME: /home/ftpusers/chatify
+    ports:
+      - "5021:21"
+      - "50000-50009:30000-30009"
+    volumes:
+      - ftp_data:/home/ftpusers/chatify
+    networks:
+      - gcloud-network
+
+networks:
+  gcloud-network:
+    driver: bridge
+
+volumes:
+  config_files:
+  mysql_data:
+  redis_data:
+  gcloud_config:
+  app_logs:
+  stats_logs:
+  executor_logs:
+  ftp_data:
