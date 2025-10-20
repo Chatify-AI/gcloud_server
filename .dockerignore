@@ -1,0 +1,91 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+.npm
+.eslintcache
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+dist
+build
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage
+.nyc_output
+jest.config.js
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific
+database/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Misc
+README.md
+LICENSE
+CHANGELOG.md
+.editorconfig
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Scripts
+scripts/
+*.sh
+
+# Backups
+*.bak
+*.backup
+*~

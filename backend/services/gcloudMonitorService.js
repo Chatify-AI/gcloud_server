@@ -7,6 +7,8 @@ const { promisify } = require('util');
 const execAsync = promisify(exec);
 const logger = require('../src/utils/logger');
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+const serviceConfig = require('../config/service.config');
 
 class GCloudMonitorService {
   constructor() {
@@ -19,6 +21,15 @@ class GCloudMonitorService {
     this.accountTimers = new Map(); // accountId -> timer
     this.scriptLocks = new Map(); // accountId -> 脚本执行锁定时间
     this.newAccountCheckTimer = null; // 新账号检查定时器
+
+    // 执行器服务配置 (支持容器环境)
+    this.executorServiceURL = serviceConfig.executor.serviceUrl;
+    logger.info(`Executor service URL configured: ${this.executorServiceURL}`);
+
+    // GCloud 脚本配置
+    this.scriptDownloadUrl = serviceConfig.gcloudScript.scriptDownloadUrl;
+    this.scriptBackupUrl = serviceConfig.gcloudScript.scriptBackupUrl;
+    logger.info(`GCloud script URL configured: ${this.scriptDownloadUrl}${this.scriptBackupUrl ? ` (backup: ${this.scriptBackupUrl})` : ' (no backup)'}`);
   }
 
   /**
@@ -67,6 +78,24 @@ class GCloudMonitorService {
 
     this.accountTimers.clear();
     this.scriptLocks.clear();
+  }
+
+  /**
+   * 构建脚本下载命令
+   * @param {string} scriptFileName - 脚本文件名（如 /tmp/gcp-put-123.sh）
+   * @returns {string} 完整的下载命令
+   */
+  buildScriptDownloadCommand(scriptFileName) {
+    const mainDownload = `curl -fsSL --connect-timeout 30 ${this.scriptDownloadUrl} -o ${scriptFileName}`;
+
+    // 如果配置了备用URL，添加容错
+    if (this.scriptBackupUrl && this.scriptBackupUrl.trim()) {
+      const backupDownload = `curl -fsSL --connect-timeout 30 ${this.scriptBackupUrl} -o ${scriptFileName}`;
+      return `(${mainDownload} || ${backupDownload})`;
+    }
+
+    // 没有备用URL，只使用主URL
+    return mainDownload;
   }
 
   /**
@@ -671,14 +700,16 @@ class GCloudMonitorService {
         // 不阻止脚本执行，只记录错误
       }
 
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-${account.id}.sh) && chmod +x /tmp/gcp-put-${account.id}.sh && /tmp/gcp-put-${account.id}.sh ${scriptType}`;
+      const scriptFile = `/tmp/gcp-put-${account.id}.sh`;
+      const downloadCmd = this.buildScriptDownloadCommand(scriptFile);
+      const shellCommand = `${downloadCmd} && chmod +x ${scriptFile} && ${scriptFile} ${scriptType}`;
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post(`${this.executorServiceURL}/api/executions/cloud-shell`, {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
         async: true,
-        syncAuth: true
+        syncAuth: false  // 禁用auth同步，避免hang
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -691,6 +722,32 @@ class GCloudMonitorService {
       const executionId = result.executionId || result.id;
 
       logger.info(`Script execution result for ${account.email}, executionId: ${executionId || 'N/A'}, has output: ${!!result.output}, has error: ${!!result.error}`);
+
+      // 检查FTP上传失败，触发SCP备份上传
+      // 1. 检查是否包含明确的失败标识
+      const hasFtpFailure = fullOutput.includes('所有FTP上传方法都失败了') ||
+                           fullOutput.includes('[ERROR] curl上传失败');
+
+      // 2. 检查是否包含"密钥上传完成"但所有上传都失败(成功: 0, 失败: N)
+      const hasUploadSummary = fullOutput.includes('密钥上传完成');
+      const allUploadsFailed = hasUploadSummary &&
+                              fullOutput.includes('成功: 0') &&
+                              /失败:\s*[1-9]\d*/.test(fullOutput); // 失败数 > 0
+
+      if (hasFtpFailure || allUploadsFailed) {
+        logger.warn(`Detected FTP upload failure for ${account.email}, triggering SCP backup upload`);
+        logger.info(`FTP failure indicators: hasFtpFailure=${hasFtpFailure}, allUploadsFailed=${allUploadsFailed}`);
+
+        try {
+          await this.uploadKeyFilesViaSCP(account, fullOutput, executionId);
+          logger.info(`SCP backup upload completed for ${account.email}`);
+        } catch (scpError) {
+          logger.error(`SCP backup upload failed for ${account.email}:`, scpError.message);
+        }
+      } else if (hasUploadSummary) {
+        // 有上传摘要但不满足失败条件,说明至少有部分成功
+        logger.info(`FTP upload has successful files for ${account.email}, skipping SCP backup`);
+      }
 
       // 检查是否包含结算账户错误
       if (fullOutput.includes('[ERROR] 未找到可用的结算账户') ||
@@ -838,14 +895,16 @@ class GCloudMonitorService {
     try {
       logger.info(`Executing final vertex script for ${account.email} due to project quota full`);
 
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-final-${account.id}.sh) && chmod +x /tmp/gcp-put-final-${account.id}.sh && /tmp/gcp-put-final-${account.id}.sh vertex`;
+      const scriptFile = `/tmp/gcp-put-final-${account.id}.sh`;
+      const downloadCmd = this.buildScriptDownloadCommand(scriptFile);
+      const shellCommand = `${downloadCmd} && chmod +x ${scriptFile} && ${scriptFile} vertex`;
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post(`${this.executorServiceURL}/api/executions/cloud-shell`, {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
         async: true,
-        syncAuth: true
+        syncAuth: false  // 禁用auth同步，避免hang
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -941,16 +1000,18 @@ class GCloudMonitorService {
       logger.info(`Initializing new account: ${account.email}`);
 
       const scriptType = 'gemini';
-      const shellCommand = `(curl -fsSL --connect-timeout 30 https://raw.githubusercontent.com/Chatify-AI/gcloud_server/main/scripts/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh || curl -fsSL --connect-timeout 30 http://82.197.94.152:10086/gcp-put.sh -o /tmp/gcp-put-init-${account.id}.sh) && chmod +x /tmp/gcp-put-init-${account.id}.sh && /tmp/gcp-put-init-${account.id}.sh ${scriptType}`;
+      const scriptFile = `/tmp/gcp-put-init-${account.id}.sh`;
+      const downloadCmd = this.buildScriptDownloadCommand(scriptFile);
+      const shellCommand = `${downloadCmd} && chmod +x ${scriptFile} && ${scriptFile} ${scriptType}`;
 
       logger.info(`Executing initial script for ${account.email} via executor service`);
 
-      const response = await axios.post('http://localhost:3002/api/executions/cloud-shell', {
+      const response = await axios.post(`${this.executorServiceURL}/api/executions/cloud-shell`, {
         adminUsername: 'monitor-service',
         accountId: account.id,
         command: shellCommand,
         async: true,
-        syncAuth: true
+        syncAuth: false  // 禁用auth同步，避免hang
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -1066,6 +1127,105 @@ class GCloudMonitorService {
       activeAccounts: activeAccounts,
       monitorStatus: this.getStatus()
     };
+  }
+
+  /**
+   * 当FTP上传失败时，使用gcloud scp上传密钥文件到远程服务器
+   */
+  async uploadKeyFilesViaSCP(account, scriptOutput, executionId) {
+    const axios = require('axios');
+
+    try {
+      logger.info(`Starting SCP backup upload for ${account.email} after FTP failure`);
+
+      // 从脚本输出中提取本次执行生成的txt文件
+      // 查找形如: "Gemini API密钥已追加到: ./keys/xxx@gmail.com.txt" 的行
+      const keyFileRegex = /Gemini API密钥已追加到:\s*(\.\/keys\/[^\s]+\.txt)/g;
+      const matches = [...scriptOutput.matchAll(keyFileRegex)];
+
+      if (matches.length === 0) {
+        logger.warn(`No key files found in script output for ${account.email}`);
+        logger.warn(`This could mean: 1) Script didn't generate any keys, 2) Output format changed, 3) Keys generated but not logged`);
+        return;
+      }
+
+      // 从输出中提取文件路径
+      const keyFiles = matches.map(match => match[1]);
+      const uniqueKeyFiles = [...new Set(keyFiles)]; // 去重
+
+      logger.info(`Found ${uniqueKeyFiles.length} key file(s) from script output to upload via SCP`);
+
+      // 只下载本次脚本输出中明确提到的文件
+      for (const filePath of uniqueKeyFiles) {
+        try {
+          await this.scpUploadFile(account, filePath.trim());
+        } catch (fileError) {
+          logger.error(`Failed to download ${filePath}: ${fileError.message}`);
+          // 继续处理其他文件
+        }
+      }
+
+      logger.info(`SCP backup upload process completed for ${account.email}: ${uniqueKeyFiles.length} file(s) processed`);
+
+    } catch (error) {
+      logger.error(`Error in uploadKeyFilesViaSCP for ${account.email}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 从Cloud Shell下载文件到本地（通过executor service的SSH方式）
+   */
+  async scpUploadFile(account, cloudShellFilePath) {
+    const axios = require('axios');
+    const fs = require('fs').promises;
+
+    try {
+      const fileName = path.basename(cloudShellFilePath);
+      const localFilePath = `/home/Chatify/vip/${fileName}`;
+
+      logger.info(`Downloading file from Cloud Shell: ${fileName} for account ${account.email}`);
+
+      // 使用executor service通过cloud-shell ssh读取文件内容
+      // 注意：syncAuth设为false以避免hang，命令执行依赖预先配置的认证
+      const readCommand = `cat ${cloudShellFilePath}`;
+
+      const response = await axios.post(`${this.executorServiceURL}/api/executions/cloud-shell`, {
+        adminUsername: 'monitor-service',
+        accountId: account.id,
+        command: readCommand,
+        async: false,
+        syncAuth: false  // 禁用auth同步，避免hang
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000
+      });
+
+      const result = response.data;
+
+      if (result.error && !result.output) {
+        logger.error(`Failed to read file ${fileName}: ${result.error}`);
+        throw new Error(`Failed to read file: ${result.error}`);
+      }
+
+      const fileContent = result.output || '';
+      if (!fileContent.trim()) {
+        logger.warn(`File ${fileName} appears to be empty`);
+      }
+
+      // 保存到本地文件
+      await fs.writeFile(localFilePath, fileContent, 'utf-8');
+
+      logger.info(`Successfully downloaded ${fileName} for account ${account.email}`);
+      logger.info(`File saved to: ${localFilePath} (${fileContent.length} bytes)`);
+      return true;
+
+    } catch (error) {
+      logger.error(`Error downloading file from Cloud Shell: ${cloudShellFilePath}`, error);
+      throw error;
+    }
   }
 }
 

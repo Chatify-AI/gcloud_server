@@ -44,7 +44,7 @@ router.post('/execute', async (req, res) => {
 // 执行Cloud Shell命令
 router.post('/cloud-shell', async (req, res) => {
   try {
-    const { accountId, command, async = false } = req.body;
+    const { accountId, command, async = false, syncAuth = false } = req.body;
 
     if (!accountId || !command) {
       return res.status(400).json({ error: 'Account ID and command are required' });
@@ -63,7 +63,7 @@ router.post('/cloud-shell', async (req, res) => {
       req.admin?.username || 'anonymous',
       accountId,
       command,
-      { async }
+      { async, syncAuth }
     );
 
     res.json(result);

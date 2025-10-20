@@ -1,11 +1,13 @@
 const axios = require('axios');
 const logger = require('../src/utils/logger');
+const serviceConfig = require('../config/service.config');
 
 class OneApiService {
   constructor() {
-    // OneAPI配置
-    this.baseUrl = process.env.ONEAPI_BASE_URL || 'http://104.194.9.201:11002';
-    this.apiKey = process.env.ONEAPI_KEY || 't0bAXxyETOitEfEWuU37sWSqwJrE';
+    // OneAPI配置 - 使用统一配置文件
+    this.baseUrl = serviceConfig.oneApi.baseUrl;
+    this.apiKey = serviceConfig.oneApi.apiKey;
+    logger.info(`OneAPI service configured: ${this.baseUrl}`);
   }
 
   /**
@@ -83,7 +85,7 @@ class OneApiService {
               'New-API-User': '1',
               'Proxy-Connection': 'keep-alive',
               'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
-              'X-Forwarded-Host': '104.194.9.201:11002',
+              'X-Forwarded-Host': this.baseUrl.replace(/^https?:\/\//, ''),
               'Authorization': `Bearer ${this.apiKey}`
             },
             timeout: 30000
@@ -567,7 +569,7 @@ class OneApiService {
           other: "",
           models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-image,gemini-2.5-flash-image-preview,gemini-2.5-flash-lite,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite-preview-09-2025-nothinking,gemini-2.5-flash-lite-preview-09-2025-thinking,gemini-2.5-flash-lite-preview-09-2025-thinking-*,gemini-2.5-flash-lite-thinking-*,gemini-2.5-flash-nothinking,gemini-2.5-flash-preview-09-2025,gemini-2.5-flash-preview-09-2025-nothinking,gemini-2.5-flash-preview-09-2025-thinking,gemini-2.5-flash-preview-09-2025-thinking-*,gemini-2.5-flash-preview-native-audio-dialog,gemini-2.5-flash-preview-tts,gemini-2.5-flash-thinking,gemini-2.5-flash-thinking-*,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-preview-06-05,gemini-2.5-pro-preview-06-05-nothinking,gemini-2.5-pro-preview-06-05-thinking,gemini-2.5-pro-preview-06-05-thinking-*,gemini-2.5-pro-preview-tts,gemini-2.5-pro-thinking,gemini-2.5-pro-thinking-*,gemini-flash-latest,gemini-flash-latest-nothinking,gemini-flash-latest-thinking,gemini-flash-latest-thinking-*,gemini-flash-lite-latest,gemini-flash-lite-latest-nothinking,gemini-flash-lite-latest-thinking,gemini-flash-lite-latest-thinking-*,gemini-pro-latest,gemini-pro-latest-nothinking,gemini-pro-latest-thinking,gemini-pro-latest-thinking-*,imagen-3.0-generate-002,imagen-4.0-fast-generate-001,imagen-4.0-generate-001,imagen-4.0-ultra-generate-001,veo-2.0-generate-001,veo-3.0-fast-generate-preview,veo-3.0-generate-preview",
           auto_ban: 0,
-          failure_timeout_ban_limit: 12000,
+          failure_timeout_ban_limit: 13000,
           enable_timestamp_granularity: 0,
           enable_cloud_tools: 0,
           groups: ["default"],
@@ -655,6 +657,124 @@ class OneApiService {
   }
 
   /**
+   * 创建Gemini渠道 (端口13000版本)
+   * 特殊配置: status_code_mapping={"429": "401"}, auto_ban=1
+   */
+  async createGeminiChannelPort13000(name, key) {
+    const fs = require('fs').promises;
+    const path = require('path');
+    const logDir = '/root/gcloud_server/logs/oneapi_requests';
+
+    // 确保日志目录存在
+    try {
+      await fs.mkdir(logDir, { recursive: true });
+    } catch (e) {}
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(logDir, `gemini_channel_port13000_${timestamp}.json`);
+
+    try {
+      const payload = {
+        mode: "batch",
+        channel: {
+          type: 24,
+          max_input_tokens: 0,
+          other: "",
+          models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-image,gemini-2.5-flash-image-preview,gemini-2.5-flash-lite,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite-preview-09-2025-nothinking,gemini-2.5-flash-lite-preview-09-2025-thinking,gemini-2.5-flash-lite-preview-09-2025-thinking-*,gemini-2.5-flash-lite-thinking-*,gemini-2.5-flash-nothinking,gemini-2.5-flash-preview-09-2025,gemini-2.5-flash-preview-09-2025-nothinking,gemini-2.5-flash-preview-09-2025-thinking,gemini-2.5-flash-preview-09-2025-thinking-*,gemini-2.5-flash-preview-native-audio-dialog,gemini-2.5-flash-preview-tts,gemini-2.5-flash-thinking,gemini-2.5-flash-thinking-*,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-preview-06-05,gemini-2.5-pro-preview-06-05-nothinking,gemini-2.5-pro-preview-06-05-thinking,gemini-2.5-pro-preview-06-05-thinking-*,gemini-2.5-pro-preview-tts,gemini-2.5-pro-thinking,gemini-2.5-pro-thinking-*,gemini-flash-latest,gemini-flash-latest-nothinking,gemini-flash-latest-thinking,gemini-flash-latest-thinking-*,gemini-flash-lite-latest,gemini-flash-lite-latest-nothinking,gemini-flash-lite-latest-thinking,gemini-flash-lite-latest-thinking-*,gemini-pro-latest,gemini-pro-latest-nothinking,gemini-pro-latest-thinking,gemini-pro-latest-thinking-*,imagen-3.0-generate-002,imagen-4.0-fast-generate-001,imagen-4.0-generate-001,imagen-4.0-ultra-generate-001,veo-2.0-generate-001,veo-3.0-fast-generate-preview,veo-3.0-generate-preview",
+          auto_ban: 1,  // 启用自动禁用
+          failure_timeout_ban_limit: 13000,
+          enable_timestamp_granularity: 0,
+          enable_cloud_tools: 0,
+          groups: ["default"],
+          priority: 3,
+          weight: 0,
+          price: 0,
+          multi_key_mode: "random",
+          name: name,
+          base_url: "http://104.194.9.201:13000",  // Gemini渠道固定地址
+          test_model: "",
+          model_mapping: "",
+          return_model_mapping: "",
+          model_timeout_mapping: "",
+          tag: "",
+          status_code_mapping: "{\"429\": \"401\"}",  // 特殊状态码映射
+          setting: "",
+          key: key,
+          group: "default,Gemini"
+        }
+      };
+
+      // 记录请求
+      const logData = {
+        timestamp: new Date().toISOString(),
+        type: 'request',
+        url: 'http://104.194.9.201:13000/api/channel/',
+        channelName: name,
+        keyPreview: key.substring(0, 10) + '...',
+        payload: payload
+      };
+
+      await fs.writeFile(logFile, JSON.stringify(logData, null, 2));
+      logger.info(`OneAPI Port 13000 request logged to: ${logFile}`);
+
+      const response = await axios.post(
+        'http://104.194.9.201:13000/api/channel/',
+        payload,
+        {
+          headers: {
+            'Accept': 'application/json, text/plain, */*',
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer lvlgr4jIX9c+jhgJs6MHb0bg40pt0LwB',
+            'New-API-User': '1'
+          },
+          timeout: 10000
+        }
+      );
+
+      // 追加响应到日志
+      const responseLog = {
+        timestamp: new Date().toISOString(),
+        type: 'response',
+        status: response.status,
+        statusText: response.statusText,
+        data: response.data
+      };
+
+      const existingLog = JSON.parse(await fs.readFile(logFile, 'utf-8'));
+      existingLog.response = responseLog;
+      await fs.writeFile(logFile, JSON.stringify(existingLog, null, 2));
+
+      logger.info(`OneAPI Port 13000 response: ${JSON.stringify(response.data)}`);
+
+      return response.data;
+    } catch (error) {
+      // 记录错误
+      try {
+        const errorLog = {
+          timestamp: new Date().toISOString(),
+          type: 'error',
+          error: {
+            message: error.message,
+            code: error.code,
+            response: error.response?.data,
+            status: error.response?.status
+          }
+        };
+
+        const existingLog = JSON.parse(await fs.readFile(logFile, 'utf-8').catch(() => '{}'));
+        existingLog.error = errorLog;
+        await fs.writeFile(logFile, JSON.stringify(existingLog, null, 2));
+      } catch (logError) {
+        logger.error('Failed to log error:', logError);
+      }
+
+      logger.error('Failed to create Gemini channel on port 13000:', error.message);
+      logger.error('Error details:', error.response?.data || error);
+      throw new Error(`创建Gemini渠道(13000端口)失败: ${error.message}`);
+    }
+  }
+
+  /**
    * 创建Vertex渠道
    */
   async createVertexChannel(name, key) {
@@ -667,7 +787,7 @@ class OneApiService {
           max_input_tokens: 0,
           models: "gemini-2.0-flash,gemini-2.0-flash-001,gemini-2.0-flash-lite,gemini-2.0-flash-lite-001,gemini-2.0-flash-preview-image-generation,gemini-2.5-flash,gemini-2.5-flash-image,gemini-2.5-flash-image-preview,gemini-2.5-flash-lite,gemini-2.5-flash-lite-preview-09-2025,gemini-2.5-flash-lite-preview-09-2025-nothinking,gemini-2.5-flash-lite-preview-09-2025-thinking,gemini-2.5-flash-lite-preview-09-2025-thinking-*,gemini-2.5-flash-lite-thinking-*,gemini-2.5-flash-nothinking,gemini-2.5-flash-preview-09-2025,gemini-2.5-flash-preview-09-2025-nothinking,gemini-2.5-flash-preview-09-2025-thinking,gemini-2.5-flash-preview-09-2025-thinking-*,gemini-2.5-flash-preview-native-audio-dialog,gemini-2.5-flash-preview-tts,gemini-2.5-flash-thinking,gemini-2.5-flash-thinking-*,gemini-2.5-pro,gemini-2.5-pro-nothinking,gemini-2.5-pro-preview-06-05,gemini-2.5-pro-preview-06-05-nothinking,gemini-2.5-pro-preview-06-05-thinking,gemini-2.5-pro-preview-06-05-thinking-*,gemini-2.5-pro-preview-tts,gemini-2.5-pro-thinking,gemini-2.5-pro-thinking-*,gemini-flash-latest,gemini-flash-latest-nothinking,gemini-flash-latest-thinking,gemini-flash-latest-thinking-*,gemini-flash-lite-latest,gemini-flash-lite-latest-nothinking,gemini-flash-lite-latest-thinking,gemini-flash-lite-latest-thinking-*,gemini-pro-latest,gemini-pro-latest-nothinking,gemini-pro-latest-thinking,gemini-pro-latest-thinking-*,imagen-3.0-generate-002,imagen-4.0-fast-generate-001,imagen-4.0-generate-001,imagen-4.0-ultra-generate-001,veo-2.0-generate-001,veo-3.0-fast-generate-preview,veo-3.0-generate-preview",
           auto_ban: 0,
-          failure_timeout_ban_limit: 12000,
+          failure_timeout_ban_limit: 13000,
           enable_timestamp_granularity: 0,
           enable_cloud_tools: 0,
           groups: ["default"],
@@ -753,7 +873,7 @@ class OneApiService {
         models: channel.models,
         auto_ban: 1, // 启用自动禁用
         status: 1, // 启用渠道
-        failure_timeout_ban_limit: channel.failure_timeout_ban_limit || 12000,
+        failure_timeout_ban_limit: channel.failure_timeout_ban_limit || 13000,
         enable_timestamp_granularity: channel.enable_timestamp_granularity || 0,
         enable_cloud_tools: channel.enable_cloud_tools || 0,
         groups: channel.groups || ["default"],
@@ -956,7 +1076,7 @@ class OneApiService {
         models: channel.models,
         auto_ban: channel.auto_ban || 0,
         status: 2, // 禁用渠道
-        failure_timeout_ban_limit: channel.failure_timeout_ban_limit || 12000,
+        failure_timeout_ban_limit: channel.failure_timeout_ban_limit || 13000,
         enable_timestamp_granularity: channel.enable_timestamp_granularity || 0,
         enable_cloud_tools: channel.enable_cloud_tools || 0,
         groups: channel.groups || ["default"],

@@ -6,13 +6,13 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fetch = require('node-fetch');
 const { connectDB } = require('./config/database');
 const channelStatsService = require('./channelStatsService');
 
-// Make fetch available globally for compatibility
+// Node.js 18+ has built-in fetch, no need for node-fetch
+// Make fetch available globally for compatibility (it already is in Node 18+)
 if (!global.fetch) {
-    global.fetch = fetch;
+    console.warn('Using Node.js version without built-in fetch support');
 }
 
 const app = express();

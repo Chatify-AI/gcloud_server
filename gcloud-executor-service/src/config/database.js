@@ -4,11 +4,11 @@ const logger = require('../utils/logger');
 // 数据库连接配置
 const sequelize = new Sequelize({
   dialect: 'mysql',
-  host: 'localhost',
-  port: 3306,
-  database: 'gcloud',
-  username: 'gcloud',
-  password: 'gcloud123',
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 3306,
+  database: process.env.DB_NAME || 'gcloud',
+  username: process.env.DB_USER || 'gcloud',
+  password: process.env.DB_PASSWORD || 'gcloud123',
   define: {
     // 使用下划线格式的表名和字段名
     underscored: true,

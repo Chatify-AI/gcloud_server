@@ -338,7 +338,7 @@ class GlobalChannelMonitorService {
         models: channelData.models,
         auto_ban: 1, // 启用自动禁用
         status: channelData.status, // 保持原状态不变
-        failure_timeout_ban_limit: channelData.failure_timeout_ban_limit || 12000,
+        failure_timeout_ban_limit: channelData.failure_timeout_ban_limit || 13000,
         priority: channelData.priority || 0,
         other: channelData.other || '',
         test_model: channelData.test_model || ''

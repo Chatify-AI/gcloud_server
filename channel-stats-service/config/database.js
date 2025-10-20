@@ -3,11 +3,11 @@ const { Sequelize } = require('sequelize');
 // 使用与主项目相同的 MySQL 配置
 const sequelize = new Sequelize({
   dialect: 'mysql',
-  host: 'localhost',
-  port: 3306,
-  database: 'gcloud',
-  username: 'gcloud',
-  password: 'gcloud123',
+  host: process.env.DB_HOST || 'localhost',
+  port: process.env.DB_PORT || 3306,
+  database: process.env.DB_NAME || 'gcloud',
+  username: process.env.DB_USER || 'gcloud',
+  password: process.env.DB_PASSWORD || 'gcloud123',
   logging: false, // 禁用日志以减少输出
   define: {
     timestamps: true,

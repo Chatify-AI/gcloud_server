@@ -6,7 +6,7 @@ const { testConnection, sequelize } = require('./config/database');
 const executionRoutes = require('./routes/executions');
 
 const app = express();
-const PORT = process.env.EXECUTOR_PORT || 3002;
+const PORT = process.env.PORT || process.env.EXECUTOR_PORT || 3001;
 
 // Middleware
 app.use(helmet({

@@ -6,7 +6,7 @@ class GCloudExecutorClient {
     this.baseURL = process.env.EXECUTOR_SERVICE_URL || 'http://localhost:3002';
     this.client = axios.create({
       baseURL: this.baseURL,
-      timeout: 30000, // 30 seconds for regular requests
+      timeout: 10 * 60 * 1000, // 10 minutes for Cloud Shell commands (increased from 30s)
       headers: {
         'Content-Type': 'application/json'
       }

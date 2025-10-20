@@ -6,7 +6,7 @@ const ChannelAutoLog = require('../models/ChannelAutoLog');
 
 class ChannelFileMonitor {
   constructor() {
-    this.monitorPath = '/home/Chatify/vip';
+    this.monitorPath = process.env.CHANNEL_MONITOR_PATH || '/home/Chatify/vip';
     this.interval = 5000; // 5秒监听一次
     this.isRunning = false;
     this.timer = null;
@@ -199,29 +199,16 @@ class ChannelFileMonitor {
         createResult = await this.createVertexChannel(filename, content);
       }
 
-      // 验证渠道是否真的创建成功
-      let verificationSuccess = false;
-      if (channelName) {
-        logger.info(`🔍 Verifying channel creation for: ${channelName}`);
-        await new Promise(resolve => setTimeout(resolve, 3000)); // 等待3秒让OneAPI同步
-
-        try {
-          const searchResult = await oneApiService.searchChannels({ keyword: channelName });
-          const foundChannels = searchResult?.data?.items?.filter(ch => ch.name === channelName) || [];
-
-          if (foundChannels.length > 0) {
-            logger.info(`✅ Verification successful: Found ${foundChannels.length} channel(s) with name ${channelName}`);
-            logger.info(`Channel IDs: ${foundChannels.map(ch => ch.id).join(', ')}`);
-            verificationSuccess = true;
-          } else {
-            logger.error(`❌ Verification failed: Channel ${channelName} not found in OneAPI`);
-          }
-        } catch (verifyError) {
-          logger.error(`❌ Verification error for ${channelName}:`, verifyError.message);
-        }
-      }
+      // 检查创建结果,只要主渠道成功就算成功
+      // createGeminiChannel 内部已经做了验证,我们信任它的返回结果
+      const verificationSuccess = createResult &&
+                                  (createResult.success === true || createResult.mainChannelSuccess === true);
 
       if (verificationSuccess) {
+        logger.info(`✅ Main channel creation verified, file will be moved to success directory`);
+        if (createResult.port13000Success === false) {
+          logger.warn(`⚠️ Note: Port 13000 channel creation failed, but main channel is OK`);
+        }
         // 只有验证成功才移动到success目录
         logger.info(`✅ Verification successful, preparing to move ${filename} to success directory`);
 
@@ -257,7 +244,7 @@ class ChannelFileMonitor {
   }
 
   /**
-   * 创建Gemini渠道（带重试）
+   * 创建Gemini渠道（带重试） - 同时创建两个渠道
    */
   async createGeminiChannel(filename, content) {
     // 使用文件名（去掉.txt后缀）作为基础名称
@@ -265,8 +252,10 @@ class ChannelFileMonitor {
     // 添加时间戳确保唯一性（格式：name-HHMMSS）
     const timestamp = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
     const channelName = `${baseName}-${timestamp}`;
+    const channelName13000 = `${baseName}-${timestamp}-13000`;  // 13000端口的渠道名
 
     logger.info(`生成唯一渠道名: ${channelName} (基础名: ${baseName})`);
+    logger.info(`生成13000端口渠道名: ${channelName13000}`);
 
     // 处理多行API key - 每行一个key
     const lines = content.trim().split('\n').filter(line => line.trim());
@@ -278,10 +267,10 @@ class ChannelFileMonitor {
     // 将多个key用换行符连接，OneAPI支持多key模式
     const key = lines.map(line => line.trim()).join('\n');
 
-    logger.info(`Creating Gemini channel: ${channelName} with ${lines.length} key(s)`);
+    logger.info(`Creating Gemini channels: ${channelName} and ${channelName13000} with ${lines.length} key(s)`);
     logger.info(`File: ${filename}, First key preview: ${key.substring(0, 10)}...`);
 
-    // 创建日志记录
+    // 创建两个日志记录
     const log = await ChannelAutoLog.create({
       fileName: filename,
       channelName: channelName,
@@ -290,70 +279,142 @@ class ChannelFileMonitor {
       attempts: 0
     });
 
+    const log13000 = await ChannelAutoLog.create({
+      fileName: filename,
+      channelName: channelName13000,
+      channelType: 'gemini-13000',
+      status: 'pending',
+      attempts: 0
+    });
+
     // 重试5次，增加重试次数
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        logger.info(`Attempt ${attempt}/${maxAttempts} to create channel: ${channelName}`);
+        logger.info(`Attempt ${attempt}/${maxAttempts} to create channels: ${channelName} and ${channelName13000}`);
 
         // 更新尝试次数
         await log.update({ attempts: attempt });
+        await log13000.update({ attempts: attempt });
 
-        const result = await oneApiService.createGeminiChannel(channelName, key);
+        // 并行创建两个渠道
+        logger.info(`🔄 Creating both channels in parallel...`);
+        const [result, result13000] = await Promise.all([
+          oneApiService.createGeminiChannel(channelName, key),
+          oneApiService.createGeminiChannelPort13000(channelName13000, key)
+        ]);
 
         logger.info(`OneAPI response for ${channelName}: ${JSON.stringify(result)}`);
+        logger.info(`OneAPI response for ${channelName13000}: ${JSON.stringify(result13000)}`);
 
-        // 更严格的成功判断
-        if (result && result.success === true) {
-          logger.info(`✅ Gemini channel created successfully: ${channelName} (attempt ${attempt})`);
+        // 只要主渠道(11002)创建成功就行,13000端口是额外的
+        const mainChannelSuccess = result && result.success === true;
+        const port13000Success = result13000 && result13000.success === true;
 
-          // 验证渠道是否真的创建成功 - 等待3秒后查询
+        if (!mainChannelSuccess) {
+          // 主渠道失败才重试
+          throw new Error(`Main channel (${channelName}) creation failed: ${result?.message || result?.error || 'Unknown error'}`);
+        }
+
+        // 主渠道成功了,记录13000端口的结果但不影响整体
+        if (!port13000Success) {
+          logger.warn(`⚠️ Port 13000 channel (${channelName13000}) creation failed, but continuing with main channel`);
+          logger.warn(`Port 13000 error: ${result13000?.message || result13000?.error || 'Unknown error'}`);
+        }
+
+        // 主渠道成功,继续验证
+        if (true) {
+          logger.info(`✅ Both Gemini channels created successfully (attempt ${attempt})`);
+          logger.info(`✅ Channel 1: ${channelName}`);
+          logger.info(`✅ Channel 2: ${channelName13000}`);
+
+          // 只验证主渠道是否真的创建成功 - 等待3秒后查询
           await new Promise(resolve => setTimeout(resolve, 3000));
 
           try {
-            const channels = await oneApiService.searchChannels({ keyword: channelName });
-            const createdChannels = channels?.data?.items?.filter(ch => ch.name === channelName) || [];
+            // 只验证主渠道,13000端口的渠道是额外的
+            const [searchResult1, searchResult2] = await Promise.all([
+              oneApiService.searchChannels({ keyword: channelName }),
+              port13000Success ? oneApiService.searchChannels({ keyword: channelName13000 }) : Promise.resolve(null)
+            ]);
 
-            if (createdChannels.length > 0) {
+            const createdChannels = searchResult1?.data?.items?.filter(ch => ch.name === channelName) || [];
+            const createdChannels13000 = searchResult2?.data?.items?.filter(ch => ch.name === channelName13000) || [];
+
+            const channel1Found = createdChannels.length > 0;
+            const channel2Found = createdChannels13000.length > 0;
+
+            if (channel1Found) {
               logger.info(`✅ Verified: Found ${createdChannels.length} channel(s) named ${channelName}`);
-              logger.info(`Channel IDs: ${createdChannels.map(ch => ch.id).join(', ')}`);
+              logger.info(`Channel 1 IDs: ${createdChannels.map(ch => ch.id).join(', ')}`);
 
-              // 返回验证结果
-              return { success: true, verified: true, channels: createdChannels };
+              // 更新主渠道日志状态为成功
+              await log.update({
+                status: 'success',
+                message: `Channel created successfully after ${attempt} attempt(s)`,
+                apiResponse: JSON.stringify({ ...result, verified: true, channels: createdChannels }),
+                processedAt: new Date()
+              });
+
+              // 如果13000端口渠道也成功了,更新它的状态
+              if (port13000Success) {
+                if (channel2Found) {
+                  logger.info(`✅ Verified: Found ${createdChannels13000.length} channel(s) named ${channelName13000}`);
+                  logger.info(`Channel 2 IDs: ${createdChannels13000.map(ch => ch.id).join(', ')}`);
+                  await log13000.update({
+                    status: 'success',
+                    message: `Channel created successfully after ${attempt} attempt(s)`,
+                    apiResponse: JSON.stringify({ ...result13000, verified: true, channels: createdChannels13000 }),
+                    processedAt: new Date()
+                  });
+                } else {
+                  logger.warn(`⚠️ Port 13000 channel ${channelName13000} created but not found in search`);
+                  await log13000.update({
+                    status: 'partial',
+                    message: `Channel created but verification failed`,
+                    processedAt: new Date()
+                  });
+                }
+              } else {
+                // 13000端口渠道创建失败
+                await log13000.update({
+                  status: 'failed',
+                  message: `Channel creation failed: ${result13000?.message || 'Unknown error'}`,
+                  processedAt: new Date()
+                });
+              }
+
+              // 返回验证结果,主渠道成功就算成功
+              return {
+                success: true,
+                verified: true,
+                channels: [...createdChannels, ...createdChannels13000],
+                channelCount: createdChannels.length + createdChannels13000.length,
+                mainChannelSuccess: true,
+                port13000Success: channel2Found
+              };
             } else {
-              logger.error(`❌ CRITICAL: Channel ${channelName} NOT found in OneAPI after creation!`);
-              logger.error(`OneAPI returned success but channel doesn't exist`);
-
-              // 即使API返回成功，但验证失败
-              throw new Error(`Channel verification failed - channel not found in OneAPI`);
+              // 主渠道验证失败才抛出异常重试
+              logger.error(`❌ CRITICAL: Main channel ${channelName} NOT found in OneAPI after creation!`);
+              throw new Error(`Main channel verification failed - not found in OneAPI`);
             }
           } catch (verifyError) {
             logger.error(`❌ Verification error: ${verifyError.message}`);
             throw verifyError;
           }
-
-          // 更新日志状态为成功
-          await log.update({
-            status: 'success',
-            message: `Channel created successfully after ${attempt} attempt(s)`,
-            apiResponse: JSON.stringify({ ...result, verified: true, channels: createdChannels }),
-            processedAt: new Date()
-          });
-
-          return { success: true, verified: true, channels: createdChannels };
-        } else {
-          // API返回了非成功状态
-          const errorMsg = result?.message || result?.error || 'Unknown error from OneAPI';
-          logger.warn(`OneAPI returned non-success for ${channelName}: ${errorMsg}`);
-          throw new Error(errorMsg);
         }
       } catch (error) {
-        logger.error(`❌ Attempt ${attempt} failed for Gemini channel ${channelName}:`, error.message);
+        logger.error(`❌ Attempt ${attempt} failed for Gemini channels:`, error.message);
         logger.error(`Error details:`, error.response?.data || error);
 
         if (attempt === maxAttempts) {
-          // 更新日志状态为失败
+          // 更新两个日志状态为失败
           await log.update({
+            status: 'failed',
+            message: `Failed after ${maxAttempts} attempts: ${error.message}`,
+            processedAt: new Date()
+          });
+          await log13000.update({
             status: 'failed',
             message: `Failed after ${maxAttempts} attempts: ${error.message}`,
             processedAt: new Date()
@@ -447,7 +508,8 @@ class ChannelFileMonitor {
   async moveToProcessed(filename) {
     try {
       // 使用指定的成功目录
-      const processedDir = '/home/Chatify/vip_success';
+      const baseDir = process.env.CHANNEL_MONITOR_PATH || '/home/Chatify/vip';
+      const processedDir = baseDir.replace('/vip', '/vip_success');
       await fs.mkdir(processedDir, { recursive: true });
 
       const oldPath = path.join(this.monitorPath, filename);
@@ -493,7 +555,8 @@ class ChannelFileMonitor {
   async moveToError(filename, errorMessage) {
     try {
       // 使用指定的失败目录
-      const errorDir = '/home/Chatify/vip_failed';
+      const baseDir = process.env.CHANNEL_MONITOR_PATH || '/home/Chatify/vip';
+      const errorDir = baseDir.replace('/vip', '/vip_failed');
       await fs.mkdir(errorDir, { recursive: true });
 
       const oldPath = path.join(this.monitorPath, filename);
