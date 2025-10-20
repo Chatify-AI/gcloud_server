@@ -27,10 +27,10 @@ services:
       sh -c "
       echo '=== 下载MySQL初始化脚本 ===' &&
       apk add --no-cache wget &&
-      mkdir -p /config/mysql/init-scripts &&
-      wget -O /config/mysql/init-scripts/01-init.sql https://raw.githubusercontent.com/Chatify-AI/gcloud_server/v3.6.1/deploy/mysql/init-scripts/01-init.sql &&
+      wget -O /config/01-init.sql https://raw.githubusercontent.com/Chatify-AI/gcloud_server/v3.6.1/deploy/mysql/init-scripts/01-init.sql &&
       echo '=== MySQL初始化脚本下载完成 ===' &&
-      ls -lh /config/mysql/init-scripts/ &&
+      ls -lh /config/ &&
+      cat /config/01-init.sql | head -20 &&
       touch /config/.ready
       "
     volumes:
